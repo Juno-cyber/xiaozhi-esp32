@@ -231,6 +231,22 @@ elseif(CONFIG_USE_CUSTOM_WAKE_WORD)
     list(APPEND SOURCES "audio/wake_words/custom_wake_word.cc")
 endif()
 
+# 加入墨水屏幕的编译项
+if(CONFIG_BOARD_TYPE_MU_EPAPER_ESP32)
+    file(GLOB MU_EPAPER_SOURCE 
+        ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_TYPE}/Epaper_display/src/*.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_TYPE}/Epaper_display/src/*.c
+        # ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_TYPE}/Epaper_display/src/utility/*.cpp
+        # ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_TYPE}/Epaper_display/src/utility/*.c        
+    )
+    list(APPEND SOURCES ${MU_EPAPER_SOURCE})
+    file(GLOB MU_EPAPER_INCLUDE
+        ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_TYPE}/Epaper_display/src/
+        # ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_TYPE}/Epaper_display/src/utility/
+    )
+    list(APPEND INCLUDE_DIRS ${MU_EPAPER_INCLUDE})
+endif()
+
 # 根据Kconfig选择语言目录
 if(CONFIG_LANGUAGE_ZH_CN)
     set(LANG_DIR "zh-CN")
