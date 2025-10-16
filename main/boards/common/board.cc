@@ -58,6 +58,10 @@ Display* Board::GetDisplay() {
     return &display;
 }
 
+GxEPD2_BW<GxEPD2_290_T5D, 296>* Board::GetEpaperDisplay() {
+    return nullptr; // 或者你想返回的值
+}
+
 Camera* Board::GetCamera() {
     return nullptr;
 }

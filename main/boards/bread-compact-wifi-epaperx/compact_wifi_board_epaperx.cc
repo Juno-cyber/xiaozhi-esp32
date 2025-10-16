@@ -17,6 +17,39 @@
 #include <esp_lcd_panel_ops.h>
 #include <driver/spi_common.h>
 
+//##################   墨水屏头文件 start
+#include <stdio.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "driver/gpio.h"
+
+#define ENABLE_GxEPD2_GFX 1
+#if ARDUINO >= 100
+#include <Arduino.h>
+#else
+#include <WProgram.h>
+#endif
+#include <pins_arduino.h>
+#include <GxEPD2_BW.h>
+#include <GxEPD2_3C.h>
+#include <GxEPD2_7C.h>
+#include <Fonts/FreeMonoBold9pt7b.h>
+#include <Fonts/FreeMonoBold18pt7b.h>
+// ESP32S3主控接法： 
+//    SS(CS)=10 MOSI(SDA)=11  MISO(不接)=13 SCK=12 DC=8 RST=7 BUSY=9
+// 2.9寸屏
+// GxEPD2_BW<GxEPD2_290_T5D, GxEPD2_290_T5D::HEIGHT> display_epaper(GxEPD2_290_T5D(/*CS=5*/ 10, /*DC=*/ 8, /*RST=*/ 7, /*BUSY=*/ 9));
+// select the display constructor line in one of the following files (old style):
+#include "GxEPD2_display_selection.h"
+#include "GxEPD2_display_selection_added.h"
+// #include "GxEPD2_display_selection_more.h" // private
+
+// or select the display class and display driver class in the following file (new style):
+#include "GxEPD2_display_selection_new_style.h"
+
+#include "bitmaps/Bitmaps128x296.h" // 2.9"  b/w
+//##################   墨水屏头文件 end
+
 #if defined(LCD_TYPE_ILI9341_SERIAL)
 #include "esp_lcd_ili9341.h"
 #endif
@@ -65,6 +98,8 @@ private:
  
     Button boot_button_;
     LcdDisplay* display_;
+    // 2.9寸屏
+    GxEPD2_BW<GxEPD2_290_T5D, GxEPD2_290_T5D::HEIGHT> display_epaper;
 
     void InitializeSpi() {
         spi_bus_config_t buscfg = {};
@@ -140,7 +175,8 @@ private:
 
 public:
     CompactWifiBoardEpaperX() :
-        boot_button_(BOOT_BUTTON_GPIO) {
+        boot_button_(BOOT_BUTTON_GPIO),
+        display_epaper(GxEPD2_290_T5D(EPAPER_CS, EPAPER_DC, EPAPER_RST, EPAPER_BUSY)) {
         InitializeSpi();
         InitializeLcdDisplay();
         InitializeButtons();
@@ -170,6 +206,11 @@ public:
     virtual Display* GetDisplay() override {
         return display_;
     }
+
+    // ✅ 新增函数：返回电子墨水屏对象
+    virtual GxEPD2_BW<GxEPD2_290_T5D, GxEPD2_290_T5D::HEIGHT>* GetEpaperDisplay() override {
+        return &display_epaper;
+    }    
 
     virtual Backlight* GetBacklight() override {
         if (DISPLAY_BACKLIGHT_PIN != GPIO_NUM_NC) {

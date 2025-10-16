@@ -351,6 +351,29 @@ void Application::Start() {
 
     /* Setup the display */
     auto display = board.GetDisplay();
+    auto display_epaper = board.GetEpaperDisplay();
+    display_epaper->init();
+
+    display_epaper->setFullWindow();
+    display_epaper->firstPage();
+    do
+    {
+        display_epaper->fillScreen(GxEPD_WHITE);
+    } while (display_epaper->nextPage());
+
+    display_epaper->setRotation(1);
+    display_epaper->setFont(&FreeMonoBold9pt7b);
+    if (display_epaper->epd2.WIDTH < 104)
+        display_epaper->setFont(0);
+    display_epaper->setTextColor(GxEPD_BLACK);
+    display_epaper->setPartialWindow(0, 0, 150, 50);  // 只更新小区域
+    display_epaper->firstPage();
+    do
+    {
+        display_epaper->fillScreen(GxEPD_WHITE);
+        display_epaper->setCursor(10, 20);
+        display_epaper->print("HelloWorld");
+    } while (display_epaper->nextPage());    
 
     // Print board name/version info
     display->SetChatMessage("system", SystemInfo::GetUserAgent().c_str());

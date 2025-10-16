@@ -12,6 +12,7 @@
 #include "backlight.h"
 #include "camera.h"
 #include "assets.h"
+#include <GxEPD2_BW.h>
 
 
 void* create_board();
@@ -43,6 +44,7 @@ public:
     virtual AudioCodec* GetAudioCodec() = 0;
     virtual bool GetTemperature(float& esp32temp);
     virtual Display* GetDisplay();
+    virtual GxEPD2_BW<GxEPD2_290_T5D, GxEPD2_290_T5D::HEIGHT>* GetEpaperDisplay();
     virtual Camera* GetCamera();
     virtual NetworkInterface* GetNetwork() = 0;
     virtual void StartNetwork() = 0;

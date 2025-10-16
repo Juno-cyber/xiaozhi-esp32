@@ -16,6 +16,9 @@
 #include "audio_service.h"
 #include "device_state_event.h"
 
+#include <Fonts/FreeMonoBold9pt7b.h>
+#include <Fonts/FreeMonoBold18pt7b.h>
+
 
 #define MAIN_EVENT_SCHEDULE (1 << 0)
 #define MAIN_EVENT_SEND_AUDIO (1 << 1)
