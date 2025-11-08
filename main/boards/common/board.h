@@ -13,6 +13,10 @@
 #include "camera.h"
 #include "assets.h"
 #include <GxEPD2_BW.h>
+//##################   Epaperdisplay类的实现 start
+#include "display/epaperdisplay/epaper_display.h"
+
+//##################   Epaperdisplay类的实现 end
 
 
 void* create_board();
@@ -45,6 +49,7 @@ public:
     virtual bool GetTemperature(float& esp32temp);
     virtual Display* GetDisplay();
     virtual GxEPD2_BW<GxEPD2_290_T5D, GxEPD2_290_T5D::HEIGHT>* GetEpaperDisplay();
+    virtual EpaperDisplay* GetEpaperDisplay_();
     virtual Camera* GetCamera();
     virtual NetworkInterface* GetNetwork() = 0;
     virtual void StartNetwork() = 0;

@@ -50,6 +50,11 @@
 #include "bitmaps/Bitmaps128x296.h" // 2.9"  b/w
 //##################   墨水屏头文件 end
 
+//##################   Epaperdisplay类的实现 start
+#include "display/epaperdisplay/epaper_display.h"
+
+//##################   Epaperdisplay类的实现 end
+
 #if defined(LCD_TYPE_ILI9341_SERIAL)
 #include "esp_lcd_ili9341.h"
 #endif
@@ -100,6 +105,7 @@ private:
     LcdDisplay* display_;
     // 2.9寸屏
     GxEPD2_BW<GxEPD2_290_T5D, GxEPD2_290_T5D::HEIGHT> display_epaper;
+    EpaperDisplay epaperdisplay;
 
     void InitializeSpi() {
         spi_bus_config_t buscfg = {};
@@ -176,7 +182,8 @@ private:
 public:
     CompactWifiBoardEpaperX() :
         boot_button_(BOOT_BUTTON_GPIO),
-        display_epaper(GxEPD2_290_T5D(EPAPER_CS, EPAPER_DC, EPAPER_RST, EPAPER_BUSY)) {
+        display_epaper(GxEPD2_290_T5D(EPAPER_CS, EPAPER_DC, EPAPER_RST, EPAPER_BUSY)),
+        epaperdisplay(EPAPER_CS, EPAPER_DC, EPAPER_RST, EPAPER_BUSY) {
         InitializeSpi();
         InitializeLcdDisplay();
         InitializeButtons();
@@ -211,6 +218,10 @@ public:
     virtual GxEPD2_BW<GxEPD2_290_T5D, GxEPD2_290_T5D::HEIGHT>* GetEpaperDisplay() override {
         return &display_epaper;
     }    
+    // ✅ 新增函数：返回电子墨水屏对象
+    virtual EpaperDisplay* GetEpaperDisplay_() override {
+        return &epaperdisplay;
+    }       
 
     virtual Backlight* GetBacklight() override {
         if (DISPLAY_BACKLIGHT_PIN != GPIO_NUM_NC) {

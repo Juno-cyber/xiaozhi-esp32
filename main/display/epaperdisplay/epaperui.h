@@ -1,0 +1,192 @@
+#pragma once
+#include <cstdint>
+#include <Arduino.h>
+#include <GxEPD2_BW.h>
+#include <Fonts/FreeMono9pt7b.h>
+
+// ===============================
+//   Epaper Label 抽象对象类型
+// ===============================
+
+enum class EpaperObjectType {
+    TEXT,
+    RECT,
+    BITMAP,
+    LINE,
+    CIRCLE,
+    TRIANGLE,           // 三角形
+    ROUND_RECT,        // 圆角矩形
+    PIXEL              // 像素点
+};
+
+enum class EpaperTextAlign {
+    LEFT,
+    CENTER,
+    RIGHT
+};
+
+class EpaperLabel {
+public:
+    // 类型
+    EpaperObjectType type;
+
+    // 公共属性
+    int16_t x = 0, y = 0;
+    uint16_t w = 0, h = 0;
+    uint16_t color = GxEPD_BLACK;
+    uint8_t rotation = 1;
+    bool mirror_h = false;  // 水平镜像
+    bool mirror_v = false;  // 垂直镜像
+
+    // 文本属性
+    String text;
+    const GFXfont* font = &FreeMono9pt7b;
+    EpaperTextAlign align = EpaperTextAlign::LEFT;
+
+    // 位图属性
+    const uint8_t* bitmap = nullptr;
+    uint16_t depth = 1;      // 1=黑白, 3=三色, 7=七色
+    bool invert = false;     // 反色
+
+    // 线段/三角形属性
+    int16_t x1 = 0, y1 = 0;
+    int16_t x2 = 0, y2 = 0;  // 三角形第三个点
+    
+    // 矩形/圆形属性
+    bool filled = false;
+    
+    // 圆形/圆角矩形属性
+    uint16_t radius = 0;
+
+    // --- 工厂函数们 ---
+    
+    // 文本
+    static EpaperLabel Text(const String& text, int16_t x, int16_t y,
+                            const GFXfont* font = &FreeMono9pt7b,
+                            uint16_t color = GxEPD_BLACK,
+                            EpaperTextAlign align = EpaperTextAlign::LEFT,
+                            uint8_t rotation = 1) {
+        EpaperLabel obj;
+        obj.type = EpaperObjectType::TEXT;
+        obj.text = text;
+        obj.x = x; obj.y = y;
+        obj.font = font;
+        obj.color = color;
+        obj.align = align;
+        obj.rotation = rotation;
+        return obj;
+    }
+
+    // 矩形
+    static EpaperLabel Rect(int16_t x, int16_t y, uint16_t w, uint16_t h,
+                            bool filled = false, uint16_t color = GxEPD_BLACK, uint8_t rotation = 1) {
+        EpaperLabel obj;
+        obj.type = EpaperObjectType::RECT;
+        obj.x = x; obj.y = y;
+        obj.w = w; obj.h = h;
+        obj.filled = filled;
+        obj.color = color;
+        obj.rotation = rotation;
+        return obj;
+    }
+
+    // 线段
+    static EpaperLabel Line(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
+                            uint16_t color = GxEPD_BLACK, uint8_t rotation = 1) {
+        EpaperLabel obj;
+        obj.type = EpaperObjectType::LINE;
+        obj.x = x0; obj.y = y0;
+        obj.x1 = x1; obj.y1 = y1;
+        obj.color = color;
+        obj.rotation = rotation;
+        return obj;
+    }
+
+    // 位图（支持镜像）
+    static EpaperLabel Bitmap(int16_t x, int16_t y, const uint8_t* bitmap,
+                              uint16_t w, uint16_t h, 
+                              uint16_t depth = 1, 
+                              uint8_t rotation = 1,
+                              bool mirror_h = false,
+                              bool mirror_v = false,
+                              bool invert = false) {
+        EpaperLabel obj;
+        obj.type = EpaperObjectType::BITMAP;
+        obj.x = x; obj.y = y;
+        obj.w = w; obj.h = h;
+        obj.bitmap = bitmap;
+        obj.depth = depth;
+        obj.rotation = rotation;
+        obj.mirror_h = mirror_h;
+        obj.mirror_v = mirror_v;
+        obj.invert = invert;
+        return obj;
+    }
+
+    // 圆形
+    static EpaperLabel Circle(int16_t x, int16_t y, uint16_t radius,
+                              bool filled = false, uint16_t color = GxEPD_BLACK, uint8_t rotation = 1) {
+        EpaperLabel obj;
+        obj.type = EpaperObjectType::CIRCLE;
+        obj.x = x; obj.y = y;
+        obj.radius = radius;
+        obj.filled = filled;
+        obj.color = color;
+        obj.rotation = rotation;
+        return obj;
+    }
+
+    // 三角形
+    static EpaperLabel Triangle(int16_t x0, int16_t y0, 
+                                int16_t x1, int16_t y1, 
+                                int16_t x2, int16_t y2,
+                                bool filled = false, 
+                                uint16_t color = GxEPD_BLACK, 
+                                uint8_t rotation = 1) {
+        EpaperLabel obj;
+        obj.type = EpaperObjectType::TRIANGLE;
+        obj.x = x0; obj.y = y0;
+        obj.x1 = x1; obj.y1 = y1;
+        obj.x2 = x2; obj.y2 = y2;
+        obj.filled = filled;
+        obj.color = color;
+        obj.rotation = rotation;
+        return obj;
+    }
+
+    // 圆角矩形
+    static EpaperLabel RoundRect(int16_t x, int16_t y, 
+                                 uint16_t w, uint16_t h, 
+                                 uint16_t radius,
+                                 bool filled = false, 
+                                 uint16_t color = GxEPD_BLACK, 
+                                 uint8_t rotation = 1) {
+        EpaperLabel obj;
+        obj.type = EpaperObjectType::ROUND_RECT;
+        obj.x = x; obj.y = y;
+        obj.w = w; obj.h = h;
+        obj.radius = radius;
+        obj.filled = filled;
+        obj.color = color;
+        obj.rotation = rotation;
+        return obj;
+    }
+
+    // 像素点
+    static EpaperLabel Pixel(int16_t x, int16_t y, 
+                            uint16_t color = GxEPD_BLACK, 
+                            uint8_t rotation = 1) {
+        EpaperLabel obj;
+        obj.type = EpaperObjectType::PIXEL;
+        obj.x = x; obj.y = y;
+        obj.color = color;
+        obj.rotation = rotation;
+        return obj;
+    }
+
+private:
+    EpaperLabel() = default; // 限制只能通过工厂函数创建
+};
+
+
+
