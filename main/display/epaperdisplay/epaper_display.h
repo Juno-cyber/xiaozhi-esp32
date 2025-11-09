@@ -27,6 +27,7 @@
 #include <GxEPD2_7C.h>
 #include <Fonts/FreeMonoBold9pt7b.h>
 #include <Fonts/FreeMonoBold18pt7b.h>
+#include <U8g2_for_Adafruit_GFX.h>
 // ESP32S3主控接法： 
 //    SS(CS)=10 MOSI(SDA)=11  MISO(不接)=13 SCK=12 DC=8 RST=7 BUSY=9
 // 2.9寸屏
@@ -77,6 +78,7 @@ protected:
     SemaphoreHandle_t mutex_ = nullptr; 
     // 2.9寸屏
     GxEPD2_BW<GxEPD2_290_T5D, GxEPD2_290_T5D::HEIGHT> display_epaper;
+    U8G2_FOR_ADAFRUIT_GFX u8g2_for_gfx;  // U8g2 字体渲染器
 
     std::chrono::system_clock::time_point last_status_update_time_;
     esp_timer_handle_t notification_timer_ = nullptr;
@@ -87,6 +89,15 @@ protected:
 
     // 内部渲染方法
     void RenderLabel(EpaperLabel *label); // 渲染单个 label
+    void RenderTextWithWrap(EpaperLabel* label); // 渲染换行文本
+    
+    // 文本边界计算
+    struct TextBounds {
+        int16_t x, y;
+        uint16_t w, h;
+    };
+    TextBounds CalculateTextBounds(EpaperLabel* label); // 计算文本边界
+    
     uint8_t reverseByte(uint8_t b); // 反转一个字节的 bit 顺序
     uint8_t* mirrorBitmap(const uint8_t* src, int16_t w, int16_t h,
                                   bool mirror_h, bool mirror_v);

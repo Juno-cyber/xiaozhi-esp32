@@ -351,7 +351,7 @@ void Application::Start() {
 
     /* Setup the display */
     auto display = board.GetDisplay();
-    auto display_epaper = board.GetEpaperDisplay_();
+    auto display_epaper = board.GetEpaperDisplay();
     display_epaper->UpdateUI(false);     // 手动触发首次显示（局部刷新，快）  
 
     // Print board name/version info
@@ -602,7 +602,9 @@ void Application::MainEventLoop() {
         if (bits & MAIN_EVENT_CLOCK_TICK) {
             clock_ticks_++;
             auto display = Board::GetInstance().GetDisplay();
+            auto display_epaper = Board::GetInstance().GetEpaperDisplay();
             display->UpdateStatusBar();
+            display_epaper->UpdateStatusBar(true);
         
             // Print the debug info every 10 seconds
             if (clock_ticks_ % 10 == 0) {

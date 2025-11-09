@@ -213,13 +213,8 @@ public:
     virtual Display* GetDisplay() override {
         return display_;
     }
-
     // ✅ 新增函数：返回电子墨水屏对象
-    virtual GxEPD2_BW<GxEPD2_290_T5D, GxEPD2_290_T5D::HEIGHT>* GetEpaperDisplay() override {
-        return &display_epaper;
-    }    
-    // ✅ 新增函数：返回电子墨水屏对象
-    virtual EpaperDisplay* GetEpaperDisplay_() override {
+    virtual EpaperDisplay* GetEpaperDisplay() override {
         return &epaperdisplay;
     }       
 

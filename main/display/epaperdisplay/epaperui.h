@@ -2,7 +2,7 @@
 #include <cstdint>
 #include <Arduino.h>
 #include <GxEPD2_BW.h>
-#include <Fonts/FreeMono9pt7b.h>
+#include <U8g2_for_Adafruit_GFX.h>
 
 // ===============================
 //   Epaper Label 抽象对象类型
@@ -40,7 +40,7 @@ public:
 
     // 文本属性
     String text;
-    const GFXfont* font = &FreeMono9pt7b;
+    const uint8_t* u8g2_font = nullptr;         // U8g2 字体指针
     EpaperTextAlign align = EpaperTextAlign::LEFT;
 
     // 位图属性
@@ -60,17 +60,19 @@ public:
 
     // --- 工厂函数们 ---
     
-    // 文本
-    static EpaperLabel Text(const String& text, int16_t x, int16_t y,
-                            const GFXfont* font = &FreeMono9pt7b,
+    // 文本（统一使用 U8g2 字体，支持中英文）
+    static EpaperLabel Text(const String& text, int16_t x, int16_t y,uint16_t max_width,
+                            const uint8_t* u8g2_font,
                             uint16_t color = GxEPD_BLACK,
                             EpaperTextAlign align = EpaperTextAlign::LEFT,
-                            uint8_t rotation = 1) {
+                            uint8_t rotation = 1
+                            ) {
         EpaperLabel obj;
         obj.type = EpaperObjectType::TEXT;
         obj.text = text;
         obj.x = x; obj.y = y;
-        obj.font = font;
+        obj.w = max_width;  // 使用 w 存储最大宽度
+        obj.u8g2_font = u8g2_font;
         obj.color = color;
         obj.align = align;
         obj.rotation = rotation;

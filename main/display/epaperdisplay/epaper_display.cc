@@ -48,6 +48,10 @@ EpaperDisplay::EpaperDisplay(gpio_num_t cs, gpio_num_t dc, gpio_num_t rst, gpio_
     {
         display_epaper.fillScreen(GxEPD_WHITE);
     } while (display_epaper.nextPage()); 
+    
+    // 初始化 U8g2 字体渲染器
+    u8g2_for_gfx.begin(display_epaper);
+    
     // 初始化 UI（不立即刷新，避免重复刷新卡顿）
     SetupUI();   
 }
@@ -80,23 +84,7 @@ void EpaperDisplay::SetEmotion(const char* emotion) {
 }  
   
 void EpaperDisplay::SetChatMessage(const char* role, const char* content) {  
-    DisplayLockGuard lock(this);
-    display_epaper.setRotation(1);
-    display_epaper.setFont(&FreeMonoBold9pt7b);
-    if (display_epaper.epd2.WIDTH < 104)
-        display_epaper.setFont(0);
-    display_epaper.setTextColor(GxEPD_BLACK);
-    display_epaper.setPartialWindow(0, 0, 296, 128);  // 只更新小区域
-    display_epaper.firstPage();
-    do
-    {
-        display_epaper.fillScreen(GxEPD_WHITE);
-        display_epaper.setCursor(10, 10);
-        display_epaper.print(content);
-        // display_epaper.drawRect(0, 0, 296, 64, GxEPD_BLACK);
-        display_epaper.drawRect(296 - 50, 128 - 50, 50, 50, GxEPD_BLACK);
 
-    } while (display_epaper.nextPage());
 }  
 
 void EpaperDisplay::ShowNotification(const std::string &notification, int duration_ms) {
@@ -109,23 +97,40 @@ void EpaperDisplay::ShowNotification(const char* notification, int duration_ms) 
 
 void EpaperDisplay::UpdateStatusBar(bool update_all) {
     auto& app = Application::GetInstance();
-    // Update time
-    if (app.GetDeviceState() == kDeviceStateIdle) {
-        if (last_status_update_time_ + std::chrono::seconds(10) < std::chrono::system_clock::now()) {
-            // Set status to clock "HH:MM"
+    
+    // 更新时间显示
+    if (app.GetDeviceState() == kDeviceStateIdle || update_all) {
+        // 每 10 秒更新一次时间
+        if (update_all || last_status_update_time_ + std::chrono::seconds(10) < std::chrono::system_clock::now()) {
             time_t now = time(NULL);
             struct tm* tm = localtime(&now);
-            // Check if the we have already set the time
+            
+            // 检查系统时间是否已设置
             if (tm->tm_year >= 2025 - 1900) {
                 char time_str[16];
-                strftime(time_str, sizeof(time_str), "%H:%M  ", tm);
-                SetStatus(time_str);
+                strftime(time_str, sizeof(time_str), "%H:%M", tm);
+                
+                ESP_LOGI(TAG, "Updating time to: %s", time_str);
+                
+                // 更新 status-time label
+                auto* time_label = GetLabel("status-time");
+                if (time_label != nullptr) {
+                    time_label->text = String(time_str);
+                    UpdateLabel("status-time"); // 局部刷新时间显示
+                    ESP_LOGI(TAG, "Updated status-time label to: %s", time_label->text.c_str());
+                } else {
+                    ESP_LOGW(TAG, "status-time label not found!");
+                }
+                
+                // 更新时间戳
+                last_status_update_time_ = std::chrono::system_clock::now();
             } else {
                 ESP_LOGW(TAG, "System time is not set, tm_year: %d", tm->tm_year);
             }
         }
+    } else {
+        ESP_LOGD(TAG, "Skip time update, state: %d", app.GetDeviceState());
     }
-
 }
 
 void EpaperDisplay::SetTheme(Theme* theme) {  
@@ -137,10 +142,11 @@ void EpaperDisplay::SetupUI() {
     
     // 示例：使用工厂函数初始化 UI 元素
     
-    // 标题文本
-    ui_labels_["title"] = new EpaperLabel(EpaperLabel::Text(
-        "Xiaozhi AI", 10, 20, &FreeMonoBold9pt7b, GxEPD_BLACK, EpaperTextAlign::LEFT, 1
-    ));
+    // 标题文本（使用 U8g2 字体）
+    // #include <u8g2_font_wqy12_t_gb2312.h>
+    // ui_labels_["title"] = new EpaperLabel(EpaperLabel::Text(
+    //     "Xiaozhi AI", 10, 20, u8g2_font_wqy12_t_gb2312, GxEPD_BLACK, EpaperTextAlign::LEFT, 1
+    // ));
     
     // // 分隔线
     // ui_labels_["divider"] = new EpaperLabel(EpaperLabel::Line(
@@ -157,10 +163,29 @@ void EpaperDisplay::SetupUI() {
     //     new EpaperLabel(EpaperLabel::Circle(270, 40, 20, false, GxEPD_BLACK, 1));
 
     // 图像示例
-    ui_labels_["image"] = new EpaperLabel(EpaperLabel::Bitmap(
-        0, 0, (const uint8_t*)Image1_leju, 128, 296, 1, 2,false,true,true
-    ));
+    // ui_labels_["image"] = new EpaperLabel(EpaperLabel::Bitmap(
+    //     0, 0, (const uint8_t*)Image1_leju, 128, 296, 1, 2,false,true,true
+    // ));
+
+    // 小智应答界面
+    // 时间显示（U8g2 字体同样支持英文）
+    ui_labels_["status-time"] = new EpaperLabel(
+        EpaperLabel::Text("05:20", 103, 20, 90, u8g2_font_crox4tb_tn, GxEPD_BLACK,
+                          EpaperTextAlign::CENTER, 1));
+    // 图标显示
+    ui_labels_["icon-show"] = new EpaperLabel(
+        EpaperLabel::Text("\u0032", 10,30, 21, u8g2_font_emoticons21_tr, GxEPD_BLACK,
+                          EpaperTextAlign::CENTER, 1));    
     
+    // 分隔线
+    ui_labels_["divider"] =
+        new EpaperLabel(EpaperLabel::Line(20, 30, 276, 30, GxEPD_BLACK, 1));
+    
+    // 中文显示示例
+    ui_labels_["talk_chinese"] = new EpaperLabel(EpaperLabel::Text(
+        "你好，世界！这是小智的中文显示，huanhangkankan", 48, 80, 200, u8g2_font_wqy16_t_gb2312,
+        GxEPD_BLACK, EpaperTextAlign::CENTER, 1
+    ));
     ui_dirty_ = true;
 }
 
@@ -225,27 +250,29 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
     
     switch (label->type) {
     case EpaperObjectType::TEXT: {
-            if (label->font != nullptr) {
-                display_epaper.setFont(label->font);
+            // 统一使用 U8g2 字体渲染（支持中英文）
+            if (label->u8g2_font != nullptr) {
+                u8g2_for_gfx.setFont(label->u8g2_font);
+                u8g2_for_gfx.setForegroundColor(label->color);
+                
+                // 如果设置了最大宽度，执行换行逻辑
+                if (label->w > 0) {
+                    RenderTextWithWrap(label);
+                } else {
+                    // 单行文本，处理文本对齐
+                    int16_t cursor_x = label->x;
+                    if (label->align == EpaperTextAlign::CENTER) {
+                        int16_t text_w = u8g2_for_gfx.getUTF8Width(label->text.c_str());
+                        cursor_x = label->x - text_w / 2;
+                    } else if (label->align == EpaperTextAlign::RIGHT) {
+                        int16_t text_w = u8g2_for_gfx.getUTF8Width(label->text.c_str());
+                        cursor_x = label->x - text_w;
+                    }
+                    
+                    u8g2_for_gfx.setCursor(cursor_x, label->y);
+                    u8g2_for_gfx.print(label->text);
+                }
             }
-            display_epaper.setTextColor(label->color);
-            
-            // 处理文本对齐
-            int16_t cursor_x = label->x;
-            if (label->align == EpaperTextAlign::CENTER) {
-                int16_t x1, y1;
-                uint16_t text_w, text_h;
-                display_epaper.getTextBounds(label->text, 0, 0, &x1, &y1, &text_w, &text_h);
-                cursor_x = label->x - text_w / 2;
-            } else if (label->align == EpaperTextAlign::RIGHT) {
-                int16_t x1, y1;
-                uint16_t text_w, text_h;
-                display_epaper.getTextBounds(label->text, 0, 0, &x1, &y1, &text_w, &text_h);
-                cursor_x = label->x - text_w;
-            }
-            
-            display_epaper.setCursor(cursor_x, label->y);
-            display_epaper.print(label->text);
             break;
         }
             
@@ -363,15 +390,67 @@ void EpaperDisplay::UpdateLabel(const String& id) {
     // 局部刷新：根据 label 区域设置局部窗口
     EpaperLabel* label = it->second;
     
-    // 计算刷新区域（可以根据实际需要调整）
-    int16_t refresh_x = label->x - 5;
-    int16_t refresh_y = label->y - 5;
-    uint16_t refresh_w = label->w + 10;
-    uint16_t refresh_h = label->h + 10;
+    // 计算刷新区域
+    int16_t refresh_x = label->x;
+    int16_t refresh_y = label->y;
+    uint16_t refresh_w = label->w;
+    uint16_t refresh_h = label->h;
+    
+    // 如果是文本类型，需要动态计算边界
+    if (label->type == EpaperObjectType::TEXT) {
+        display_epaper.setRotation(label->rotation);
+        
+        // 使用 U8g2 字体边界计算
+        if (label->u8g2_font != nullptr) {
+            u8g2_for_gfx.setFont(label->u8g2_font);
+            
+            // 如果设置了宽度限制，计算多行文本边界
+            if (label->w > 0) {
+                auto bounds = CalculateTextBounds(label);
+                refresh_x = bounds.x;
+                refresh_y = bounds.y;
+                refresh_w = bounds.w;
+                refresh_h = bounds.h;
+            } else {
+                // 单行文本
+                int16_t text_w = u8g2_for_gfx.getUTF8Width(label->text.c_str());
+                int16_t text_h = u8g2_for_gfx.getFontAscent();
+                
+                // 根据对齐方式计算实际渲染起始位置
+                int16_t render_x = label->x;
+                if (label->align == EpaperTextAlign::CENTER) {
+                    render_x = label->x - text_w / 2;
+                } else if (label->align == EpaperTextAlign::RIGHT) {
+                    render_x = label->x - text_w;
+                }
+                
+                // 设置刷新区域（添加小边距以确保完全覆盖）
+                // label->y 是基线位置，getFontAscent() 是基线以上的高度
+                refresh_x = render_x;
+                refresh_y = label->y - u8g2_for_gfx.getFontAscent();  // 从基线向上找到文本顶部
+                refresh_w = text_w;
+                refresh_h = text_h;
+            }
+        } else {
+            // 如果没有设置字体，使用默认尺寸
+            refresh_x = label->x;
+            refresh_y = label->y - 20;
+            refresh_w = 100;
+            refresh_h = 30;
+        }
+    } else {
+        // 其他类型使用 label 自身的尺寸
+        refresh_x = label->x;
+        refresh_y = label->y;
+        refresh_w = label->w;
+        refresh_h = label->h;
+    }
     
     // 边界检查
     if (refresh_x < 0) refresh_x = 0;
     if (refresh_y < 0) refresh_y = 0;
+    if (refresh_w <= 0) refresh_w = 100;  // 最小宽度
+    if (refresh_h <= 0) refresh_h = 30;   // 最小高度
     
     display_epaper.setPartialWindow(refresh_x, refresh_y, refresh_w, refresh_h);
     display_epaper.firstPage();
@@ -431,5 +510,246 @@ uint8_t* EpaperDisplay::mirrorBitmap(const uint8_t* src, int16_t w, int16_t h,
         }
     }
     return dst;
+}
+
+// 渲染带有换行的文本
+void EpaperDisplay::RenderTextWithWrap(EpaperLabel* label) {
+    if (label->u8g2_font == nullptr || label->w == 0) {
+        return;
+    }
+    
+    u8g2_for_gfx.setFont(label->u8g2_font);
+    u8g2_for_gfx.setForegroundColor(label->color);
+    
+    String text = label->text;
+    
+    // 先检查整个文本是否超出宽度，如果没超出就不换行
+    int16_t total_width = u8g2_for_gfx.getUTF8Width(text.c_str());
+    if (total_width <= label->w) {
+        // 文本没有超出宽度，单行显示
+        int16_t cursor_x = label->x;
+        if (label->align == EpaperTextAlign::CENTER) {
+            cursor_x = label->x + (label->w - total_width) / 2;
+        } else if (label->align == EpaperTextAlign::RIGHT) {
+            cursor_x = label->x + label->w - total_width;
+        }
+        u8g2_for_gfx.setCursor(cursor_x, label->y);
+        u8g2_for_gfx.print(text);
+        return;
+    }
+    
+    // 文本超出宽度，需要换行
+    int16_t cursor_y = label->y;
+    // getFontAscent() 就是行高，再加上2像素行间距
+    int16_t line_height = u8g2_for_gfx.getFontAscent() + 6;
+    
+    // 按照宽度限制进行换行
+    int text_len = text.length();
+    int start_idx = 0;
+    
+    while (start_idx < text_len) {
+        String line = "";
+        int end_idx = start_idx;
+        int16_t line_width = 0;
+        
+        // 逐个字符测试，直到超出宽度
+        while (end_idx < text_len) {
+            // 获取下一个 UTF-8 字符
+            String next_char = "";
+            uint8_t c = text[end_idx];
+            
+            if ((c & 0x80) == 0) {
+                // ASCII 字符 (0xxxxxxx)
+                next_char = String((char)c);
+                end_idx++;
+            } else if ((c & 0xE0) == 0xC0) {
+                // 2字节 UTF-8 (110xxxxx 10xxxxxx)
+                if (end_idx + 1 < text_len) {
+                    next_char = text.substring(end_idx, end_idx + 2);
+                    end_idx += 2;
+                } else {
+                    break;
+                }
+            } else if ((c & 0xF0) == 0xE0) {
+                // 3字节 UTF-8 (1110xxxx 10xxxxxx 10xxxxxx)
+                if (end_idx + 2 < text_len) {
+                    next_char = text.substring(end_idx, end_idx + 3);
+                    end_idx += 3;
+                } else {
+                    break;
+                }
+            } else if ((c & 0xF8) == 0xF0) {
+                // 4字节 UTF-8 (11110xxx 10xxxxxx 10xxxxxx 10xxxxxx)
+                if (end_idx + 3 < text_len) {
+                    next_char = text.substring(end_idx, end_idx + 4);
+                    end_idx += 4;
+                } else {
+                    break;
+                }
+            } else {
+                // 无效的 UTF-8，跳过
+                end_idx++;
+                continue;
+            }
+            
+            // 测试添加该字符后的宽度
+            String test_line = line + next_char;
+            int16_t test_width = u8g2_for_gfx.getUTF8Width(test_line.c_str());
+            
+            if (test_width > label->w && line.length() > 0) {
+                // 超出宽度，回退
+                end_idx -= next_char.length();
+                break;
+            }
+            
+            line = test_line;
+            line_width = test_width;
+        }
+        
+        // 渲染这一行，应用对齐方式
+        int16_t cursor_x = label->x;
+        if (label->align == EpaperTextAlign::CENTER) {
+            cursor_x = label->x + (label->w - line_width) / 2;
+        } else if (label->align == EpaperTextAlign::RIGHT) {
+            cursor_x = label->x + label->w - line_width;
+        }
+        
+        u8g2_for_gfx.setCursor(cursor_x, cursor_y);
+        u8g2_for_gfx.print(line);
+        
+        // 移动到下一行
+        cursor_y += line_height;
+        start_idx = end_idx;
+    }
+}
+
+// 计算文本边界（支持换行）
+EpaperDisplay::TextBounds EpaperDisplay::CalculateTextBounds(EpaperLabel* label) {
+    TextBounds bounds = {0, 0, 0, 0};
+    
+    if (label->u8g2_font == nullptr) {
+        return bounds;
+    }
+    
+    u8g2_for_gfx.setFont(label->u8g2_font);
+    
+    if (label->w > 0) {
+        // 先检查整个文本是否超出宽度
+        int16_t total_width = u8g2_for_gfx.getUTF8Width(label->text.c_str());
+        
+        if (total_width <= label->w) {
+            // 文本没有超出，按单行计算
+            int16_t bounds_x = label->x;
+            if (label->align == EpaperTextAlign::CENTER) {
+                bounds_x = label->x + (label->w - total_width) / 2;
+            } else if (label->align == EpaperTextAlign::RIGHT) {
+                bounds_x = label->x + label->w - total_width;
+            }
+            
+            bounds.x = bounds_x;
+            bounds.y = label->y - u8g2_for_gfx.getFontAscent();
+            bounds.w = total_width;
+            bounds.h = u8g2_for_gfx.getFontAscent();
+        } else {
+            // 有宽度限制且超出，计算多行文本边界
+            String text = label->text;
+            int text_len = text.length();
+            int start_idx = 0;
+            // getFontAscent() 就是行高，再加上2像素行间距
+            int16_t line_height = u8g2_for_gfx.getFontAscent() + 6;
+            int line_count = 0;
+            int16_t max_width = 0;
+            
+            while (start_idx < text_len) {
+                String line = "";
+                int end_idx = start_idx;
+                
+                // 逐个字符测试
+                while (end_idx < text_len) {
+                    String next_char = "";
+                    uint8_t c = text[end_idx];
+                    
+                    if ((c & 0x80) == 0) {
+                        next_char = String((char)c);
+                        end_idx++;
+                    } else if ((c & 0xE0) == 0xC0) {
+                        if (end_idx + 1 < text_len) {
+                            next_char = text.substring(end_idx, end_idx + 2);
+                            end_idx += 2;
+                        } else {
+                            break;
+                        }
+                    } else if ((c & 0xF0) == 0xE0) {
+                        if (end_idx + 2 < text_len) {
+                            next_char = text.substring(end_idx, end_idx + 3);
+                            end_idx += 3;
+                        } else {
+                            break;
+                        }
+                    } else if ((c & 0xF8) == 0xF0) {
+                        if (end_idx + 3 < text_len) {
+                            next_char = text.substring(end_idx, end_idx + 4);
+                            end_idx += 4;
+                        } else {
+                            break;
+                        }
+                    } else {
+                        end_idx++;
+                        continue;
+                    }
+                    
+                    String test_line = line + next_char;
+                    int16_t test_width = u8g2_for_gfx.getUTF8Width(test_line.c_str());
+                    
+                    if (test_width > label->w && line.length() > 0) {
+                        end_idx -= next_char.length();
+                        break;
+                    }
+                    
+                    line = test_line;
+                }
+                
+                // 记录最大宽度
+                int16_t line_width = u8g2_for_gfx.getUTF8Width(line.c_str());
+                if (line_width > max_width) {
+                    max_width = line_width;
+                }
+                
+                line_count++;
+                start_idx = end_idx;
+            }
+            
+            // 根据对齐方式计算 x 起始位置
+            int16_t bounds_x = label->x;
+            if (label->align == EpaperTextAlign::CENTER) {
+                bounds_x = label->x;  // 中心对齐，使用文本框宽度
+            } else if (label->align == EpaperTextAlign::RIGHT) {
+                bounds_x = label->x + label->w - max_width;  // 右对齐
+            }
+            
+            bounds.x = bounds_x;
+            bounds.y = label->y - u8g2_for_gfx.getFontAscent();
+            bounds.w = label->w;  // 使用文本框宽度
+            bounds.h = line_count * line_height;
+        }
+    } else {
+        // 单行文本
+        int16_t text_w = u8g2_for_gfx.getUTF8Width(label->text.c_str());
+        int16_t text_h = u8g2_for_gfx.getFontAscent();
+        
+        int16_t bounds_x = label->x;
+        if (label->align == EpaperTextAlign::CENTER) {
+            bounds_x = label->x - text_w / 2;
+        } else if (label->align == EpaperTextAlign::RIGHT) {
+            bounds_x = label->x - text_w;
+        }
+        
+        bounds.x = bounds_x;
+        bounds.y = label->y - u8g2_for_gfx.getFontAscent();
+        bounds.w = text_w;
+        bounds.h = text_h;
+    }
+    
+    return bounds;
 }
 
