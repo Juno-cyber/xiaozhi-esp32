@@ -71,6 +71,10 @@ public:
     void UpdateUI(bool fullRefresh = false);            // 刷新所有 label
     void AddLabel(const String& id, EpaperLabel* label); // 动态添加 label
     void RemoveLabel(const String& id);                 // 移除 label
+    
+    // 显示/隐藏控制方法
+    void LabelShow(const String& id);                      // 显示指定 label
+    void LabelHide(const String& id);                      // 隐藏指定 label
 
 protected:
     esp_pm_lock_handle_t pm_lock_ = nullptr;

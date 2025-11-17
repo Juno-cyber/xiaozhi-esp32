@@ -32,16 +32,18 @@ public:
 
     // 公共属性
     int16_t x = 0, y = 0;
-    uint16_t w = 0, h = 0;
+    uint16_t w = 0, h = 0;  // 实际渲染的宽度和高度（动态更新）
     uint16_t color = GxEPD_BLACK;
     uint8_t rotation = 1;
     bool mirror_h = false;  // 水平镜像
     bool mirror_v = false;  // 垂直镜像
+    bool visible = true;    // 显示/隐藏属性
 
     // 文本属性
     String text;
     const uint8_t* u8g2_font = nullptr;         // U8g2 字体指针
     EpaperTextAlign align = EpaperTextAlign::LEFT;
+    uint16_t w_max = 0;  // 文本最大宽度限制（用于换行）
 
     // 位图属性
     const uint8_t* bitmap = nullptr;
@@ -61,27 +63,31 @@ public:
     // --- 工厂函数们 ---
     
     // 文本（统一使用 U8g2 字体，支持中英文）
-    static EpaperLabel Text(const String& text, int16_t x, int16_t y,uint16_t max_width,
+    static EpaperLabel Text(const String& text, int16_t x, int16_t y,uint16_t max_width,uint16_t h,
                             const uint8_t* u8g2_font,
                             uint16_t color = GxEPD_BLACK,
                             EpaperTextAlign align = EpaperTextAlign::LEFT,
-                            uint8_t rotation = 1
+                            uint8_t rotation = 1,
+                            bool visible = true
                             ) {
         EpaperLabel obj;
         obj.type = EpaperObjectType::TEXT;
         obj.text = text;
         obj.x = x; obj.y = y;
-        obj.w = max_width;  // 使用 w 存储最大宽度
+        obj.w_max = max_width; // 使用 w_max 存储最大宽度限制
+        obj.h = h;        
         obj.u8g2_font = u8g2_font;
         obj.color = color;
         obj.align = align;
         obj.rotation = rotation;
+        obj.visible = visible;
         return obj;
     }
 
     // 矩形
     static EpaperLabel Rect(int16_t x, int16_t y, uint16_t w, uint16_t h,
-                            bool filled = false, uint16_t color = GxEPD_BLACK, uint8_t rotation = 1) {
+                            bool filled = false, uint16_t color = GxEPD_BLACK, uint8_t rotation = 1,
+                            bool visible = true) {
         EpaperLabel obj;
         obj.type = EpaperObjectType::RECT;
         obj.x = x; obj.y = y;
@@ -89,18 +95,21 @@ public:
         obj.filled = filled;
         obj.color = color;
         obj.rotation = rotation;
+        obj.visible = visible;
         return obj;
     }
 
     // 线段
     static EpaperLabel Line(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
-                            uint16_t color = GxEPD_BLACK, uint8_t rotation = 1) {
+                            uint16_t color = GxEPD_BLACK, uint8_t rotation = 1,
+                            bool visible = true) {
         EpaperLabel obj;
         obj.type = EpaperObjectType::LINE;
         obj.x = x0; obj.y = y0;
         obj.x1 = x1; obj.y1 = y1;
         obj.color = color;
         obj.rotation = rotation;
+        obj.visible = visible;
         return obj;
     }
 
@@ -111,7 +120,8 @@ public:
                               uint8_t rotation = 1,
                               bool mirror_h = false,
                               bool mirror_v = false,
-                              bool invert = false) {
+                              bool invert = false,
+                              bool visible = true) {
         EpaperLabel obj;
         obj.type = EpaperObjectType::BITMAP;
         obj.x = x; obj.y = y;
@@ -122,12 +132,14 @@ public:
         obj.mirror_h = mirror_h;
         obj.mirror_v = mirror_v;
         obj.invert = invert;
+        obj.visible = visible;
         return obj;
     }
 
     // 圆形
     static EpaperLabel Circle(int16_t x, int16_t y, uint16_t radius,
-                              bool filled = false, uint16_t color = GxEPD_BLACK, uint8_t rotation = 1) {
+                              bool filled = false, uint16_t color = GxEPD_BLACK, uint8_t rotation = 1,
+                              bool visible = true) {
         EpaperLabel obj;
         obj.type = EpaperObjectType::CIRCLE;
         obj.x = x; obj.y = y;
@@ -135,6 +147,7 @@ public:
         obj.filled = filled;
         obj.color = color;
         obj.rotation = rotation;
+        obj.visible = visible;
         return obj;
     }
 
@@ -144,7 +157,8 @@ public:
                                 int16_t x2, int16_t y2,
                                 bool filled = false, 
                                 uint16_t color = GxEPD_BLACK, 
-                                uint8_t rotation = 1) {
+                                uint8_t rotation = 1,
+                                bool visible = true) {
         EpaperLabel obj;
         obj.type = EpaperObjectType::TRIANGLE;
         obj.x = x0; obj.y = y0;
@@ -153,6 +167,7 @@ public:
         obj.filled = filled;
         obj.color = color;
         obj.rotation = rotation;
+        obj.visible = visible;
         return obj;
     }
 
@@ -162,7 +177,8 @@ public:
                                  uint16_t radius,
                                  bool filled = false, 
                                  uint16_t color = GxEPD_BLACK, 
-                                 uint8_t rotation = 1) {
+                                 uint8_t rotation = 1,
+                                 bool visible = true) {
         EpaperLabel obj;
         obj.type = EpaperObjectType::ROUND_RECT;
         obj.x = x; obj.y = y;
@@ -171,18 +187,21 @@ public:
         obj.filled = filled;
         obj.color = color;
         obj.rotation = rotation;
+        obj.visible = visible;
         return obj;
     }
 
     // 像素点
     static EpaperLabel Pixel(int16_t x, int16_t y, 
                             uint16_t color = GxEPD_BLACK, 
-                            uint8_t rotation = 1) {
+                            uint8_t rotation = 1,
+                            bool visible = true) {
         EpaperLabel obj;
         obj.type = EpaperObjectType::PIXEL;
         obj.x = x; obj.y = y;
         obj.color = color;
         obj.rotation = rotation;
+        obj.visible = visible;
         return obj;
     }
 
