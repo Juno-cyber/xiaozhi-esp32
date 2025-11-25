@@ -123,70 +123,70 @@ void EpaperDisplay::SetStatus(const char* status) {
 void EpaperDisplay::SetEmotion(const char* emotion) {
     DisplayLockGuard lock(this);
     
-    auto* emoji_label = GetLabel("emoji_label");
-    if (emoji_label == nullptr) {
-        ESP_LOGW(TAG, "emoji_label not found");
+    auto* emoji_image = GetLabel("emoji_image");
+    if (emoji_image == nullptr) {
+        ESP_LOGW(TAG, "emoji_image not found");
         return;
     }
     
-    // 从输入的 emotion 字符串映射到 Emoticons 图标
-    const char* emoticon = nullptr;
+    // 从输入的 emotion 字符串映射到位图图标
+    const unsigned char* emotion_bitmap = nullptr;
     
-    // 进行字符串比较，映射到对应的表情图标
+    // 进行字符串比较，映射到对应的表情位图
     if (strcmp(emotion, "neutral") == 0) {
-        emoticon = EpaperFont::Emoticons::NEUTRAL;
+        emotion_bitmap = EpaperImage::EMO_NEUTRAL_32x32;
     } else if (strcmp(emotion, "happy") == 0) {
-        emoticon = EpaperFont::Emoticons::HAPPY;
+        emotion_bitmap = EpaperImage::EMO_HAPPY_32x32;
     } else if (strcmp(emotion, "laughing") == 0) {
-        emoticon = EpaperFont::Emoticons::LAUGHING;
+        emotion_bitmap = EpaperImage::EMO_LAUGHING_32x32;
     } else if (strcmp(emotion, "funny") == 0) {
-        emoticon = EpaperFont::Emoticons::FUNNY;
+        emotion_bitmap = EpaperImage::EMO_FUNNY_32x32;
     } else if (strcmp(emotion, "sad") == 0) {
-        emoticon = EpaperFont::Emoticons::SAD;
+        emotion_bitmap = EpaperImage::EMO_SAD_32x32;
     } else if (strcmp(emotion, "angry") == 0) {
-        emoticon = EpaperFont::Emoticons::ANGRY;
+        emotion_bitmap = EpaperImage::EMO_ANGRY_32x32;
     } else if (strcmp(emotion, "crying") == 0) {
-        emoticon = EpaperFont::Emoticons::CRYING;
+        emotion_bitmap = EpaperImage::EMO_CRYING_32x32;
     } else if (strcmp(emotion, "loving") == 0) {
-        emoticon = EpaperFont::Emoticons::LOVING;
+        emotion_bitmap = EpaperImage::EMO_LOVING_32x32;
     } else if (strcmp(emotion, "embarrassed") == 0) {
-        emoticon = EpaperFont::Emoticons::EMBARRASSED;
+        emotion_bitmap = EpaperImage::EMO_EMBARRASSED_32x32;
     } else if (strcmp(emotion, "surprised") == 0) {
-        emoticon = EpaperFont::Emoticons::SURPRISED;
+        emotion_bitmap = EpaperImage::EMO_SURPRISED_32x32;
     } else if (strcmp(emotion, "shocked") == 0) {
-        emoticon = EpaperFont::Emoticons::SHOCKED;
+        emotion_bitmap = EpaperImage::EMO_SHOCKED_32x32;
     } else if (strcmp(emotion, "thinking") == 0) {
-        emoticon = EpaperFont::Emoticons::THINKING;
+        emotion_bitmap = EpaperImage::EMO_THINKING_32x32;
     } else if (strcmp(emotion, "winking") == 0) {
-        emoticon = EpaperFont::Emoticons::WINKING;
+        emotion_bitmap = EpaperImage::EMO_WINKING_32x32;
     } else if (strcmp(emotion, "cool") == 0) {
-        emoticon = EpaperFont::Emoticons::COOL;
+        emotion_bitmap = EpaperImage::EMO_COOL_32x32;
     } else if (strcmp(emotion, "relaxed") == 0) {
-        emoticon = EpaperFont::Emoticons::RELAXED;
+        emotion_bitmap = EpaperImage::EMO_RELAXED_32x32;
     } else if (strcmp(emotion, "delicious") == 0) {
-        emoticon = EpaperFont::Emoticons::DELICIOUS;
+        emotion_bitmap = EpaperImage::EMO_DELICIOUS_32x32;
     } else if (strcmp(emotion, "kissy") == 0) {
-        emoticon = EpaperFont::Emoticons::KISSY;
+        emotion_bitmap = EpaperImage::EMO_KISSY_32x32;
     } else if (strcmp(emotion, "confident") == 0) {
-        emoticon = EpaperFont::Emoticons::CONFIDENT;
+        emotion_bitmap = EpaperImage::EMO_CONFIDENT_32x32;
     } else if (strcmp(emotion, "sleepy") == 0) {
-        emoticon = EpaperFont::Emoticons::SLEEPY;
+        emotion_bitmap = EpaperImage::EMO_SLEEPY_32x32;
     } else if (strcmp(emotion, "silly") == 0) {
-        emoticon = EpaperFont::Emoticons::SILLY;
+        emotion_bitmap = EpaperImage::EMO_SILLY_32x32;
     } else if (strcmp(emotion, "confused") == 0) {
-        emoticon = EpaperFont::Emoticons::CONFUSED;
+        emotion_bitmap = EpaperImage::EMO_CONFUSED_32x32;
     } else {
         // 默认使用 neutral
-        emoticon = EpaperFont::Emoticons::NEUTRAL;
+        emotion_bitmap = EpaperImage::EMO_NEUTRAL_32x32;
         ESP_LOGD(TAG, "Unknown emotion '%s', using neutral", emotion);
     }
     
-    // 更新表情标签的文本
-    emoji_label->text = String(emoticon);
-    emoji_label->visible = true;
+    // 更新表情标签的位图
+    emoji_image->bitmap = emotion_bitmap;
+    emoji_image->visible = true;
     
     // 使用 UpdateLabel 统一刷新
-    UpdateLabel("emoji_label");
+    UpdateLabel("emoji_image");
     
     ESP_LOGD(TAG, "SetEmotion: %s", emotion);
 }  
@@ -370,45 +370,44 @@ void EpaperDisplay::SetupUI() {
     // 屏幕尺寸：128x296 (旋转后可能为296x128，根据rotation设置)
     // 布局参考LCD的垂直结构，适配墨水屏尺寸
     // ================================
-    
+
+    // ==========================================================page 1 start==========================================================
     // ===== 1. 状态栏 (status_bar) =====
     // 位置：屏幕顶部，高度20像素
     // 水平布局：网络 | 通知(隐藏) | 状态/时间 | 静音 | 电池
     
     // 1.1 网络图标 (network_label)
     AddLabel("network_label", new EpaperLabel(
-        EpaperLabel::Text(EpaperFont::Siji::WIFI_DISCONNECTED, 2, 15, 0,0, u8g2_font_siji_t_6x10, 
-                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true)));
+        EpaperLabel::Bitmap(240, 0, EpaperImage::wifi_full_24x24, 24, 24, 1, 1, false, false, false, true, 1)));
     
     // 1.2 通知文本 (notification_label) - 默认隐藏
     AddLabel("notification_label", new EpaperLabel(
-        EpaperLabel::Text("", 88, 20, 120,0, u8g2_font_wqy12_t_gb2312, 
-                         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, false)));
+        EpaperLabel::Text("", 88, 15, 120,0, u8g2_font_wqy12_t_gb2312, 
+                         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, false, 1)));
     
     // 1.3 状态标签 (status_label) - 居中显示
     AddLabel("status_label",
              new EpaperLabel(EpaperLabel::Text(
-                 "waiting", 98, 20, 100,0, u8g2_font_wqy12_t_gb2312, GxEPD_BLACK,
-                 EpaperTextAlign::CENTER, 1, true)));
+                 "waiting", 98, 15, 100,0, u8g2_font_wqy12_t_gb2312, GxEPD_BLACK,
+                 EpaperTextAlign::CENTER, 1, true, 1)));
     // 1.4 时间标签（time_label） - 居中显示
     AddLabel("time_label",
              new EpaperLabel(EpaperLabel::Text(
-                 "05:20", 98, 30, 100,0, u8g2_font_freedoomr25_mn, GxEPD_BLACK,
-                 EpaperTextAlign::CENTER, 1, true)));
+                 "05:20", 98, 25, 100,0, u8g2_font_freedoomr25_mn, GxEPD_BLACK,
+                 EpaperTextAlign::CENTER, 1, true, 1)));
     
     // 1.5 静音图标 (mute_label)
     AddLabel("mute_label", new EpaperLabel(
         EpaperLabel::Text("", 260, 15, 0,0, u8g2_font_emoticons21_tr, 
-                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true)));
+                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, 1)));
     
     // 1.6 电池图标 (battery_label)
     AddLabel("battery_label", new EpaperLabel(
-        EpaperLabel::Text("", 280, 15, 0,0, u8g2_font_emoticons21_tr, 
-                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true)));
+        EpaperLabel::Bitmap(270, 0, EpaperImage::battery_full_24x24, 24, 24, 1, 1, false, false, false, true, 1)));
     
     // 1.7 状态栏分隔线
     AddLabel("status_bar_divider", new EpaperLabel(
-        EpaperLabel::Line(20, 30, 276, 30, GxEPD_BLACK, 1, true)));
+        EpaperLabel::Line(10, 40, 286, 40, GxEPD_BLACK, 1, true, 1)));
     
     // ===== 2. 内容区 (content) =====
     // 位置：状态栏下方，占据剩余空间 (y: 25 ~ 128)
@@ -416,13 +415,13 @@ void EpaperDisplay::SetupUI() {
     // 2.1 表情容器 (emoji_box)
     // 2.1.1 表情图标 (emoji_label) - 中央显示
     AddLabel("emoji_label", new EpaperLabel(
-        EpaperLabel::Text(EpaperFont::Emoticons::NEUTRAL, 133, 60, 30,21, u8g2_font_emoticons21_tr, 
-                         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true)));
+        EpaperLabel::Text(EpaperFont::Emoticons::NEUTRAL, 193, 60, 30,21, u8g2_font_emoticons21_tr, 
+                         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, false, 1)));
     
     // 2.1.2 表情图片 (emoji_image) - 默认隐藏
     // 注：墨水屏位图需要实际资源，这里先占位
-    // AddLabel("emoji_image", new EpaperLabel(
-    //     EpaperLabel::Bitmap(74, 30, nullptr, 148, 70, 1, 1, false, false, false, false)));
+    AddLabel("emoji_image", new EpaperLabel(
+        EpaperLabel::Bitmap(132, 35, EpaperImage::EMO_NEUTRAL_32x32, 32, 32, 1, 1, false, false, false, true, 1)));
     
     // 2.2 预览图片 (preview_image) - 默认隐藏
     // AddLabel("preview_image", new EpaperLabel(
@@ -430,23 +429,36 @@ void EpaperDisplay::SetupUI() {
     
     // 2.3 聊天消息 (chat_message_label)
     AddLabel("chat_message_label", new EpaperLabel(
-        EpaperLabel::Text("", 48, 85, 200,0, u8g2_font_wqy16_t_gb2312, 
-                         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true)));
+        EpaperLabel::Text("", 28, 85, 240,0, u8g2_font_wqy16_t_gb2312, 
+                         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, 1)));
     
     // ===== 3. 低电量弹窗 (low_battery_popup) - 默认隐藏 =====
     // 位置：底部居中
     AddLabel("low_battery_popup_bg", new EpaperLabel(
-        EpaperLabel::RoundRect(20, 100, 256, 20, 6, true, GxEPD_BLACK, 1, false)));
+        EpaperLabel::RoundRect(20, 100, 256, 20, 6, true, GxEPD_BLACK, 1, false, 1)));
     
     AddLabel("low_battery_label", new EpaperLabel(
         EpaperLabel::Text("电量低，请充电", 103, 113, 90,0, u8g2_font_wqy16_t_gb2312, 
-                         GxEPD_WHITE, EpaperTextAlign::CENTER, 1, false)));
+                         GxEPD_WHITE, EpaperTextAlign::CENTER, 1, false, 1)));
+// ==========================================================page 1 end==========================================================    
+// ==========================================================page 2 start========================================================
+    AddLabel("status_bar_divider_2", new EpaperLabel(
+        EpaperLabel::Line(10, 40, 286, 40, GxEPD_BLACK, 1, true, 2)));
+
     
+// ==========================================================page 2 end==========================================================
     ui_dirty_ = true;
 }
 
 void EpaperDisplay::SetPowerSaveMode(bool on) {
 
+}
+
+void EpaperDisplay::SetPage(uint16_t page) {
+    if (current_page_ != page) {
+        current_page_ = page;
+        UpdateUI(true);
+    }
 }
 
 bool EpaperDisplay::Lock(int timeout_ms) {
@@ -525,8 +537,6 @@ void EpaperDisplay::LabelHide(const String& id) {
     }
 }
 
-
-
 void EpaperDisplay::RenderLabel(EpaperLabel* label) {
     if (label == nullptr) return;
     
@@ -534,7 +544,7 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
     display_epaper.setRotation(label->rotation);
     
     // 如果不可见，仅用白色填充区域来清除内容
-    if (!label->visible) {
+    if (!label->visible||label->page != current_page_) {
         // 计算需要清除的区域
         int16_t clear_x = label->x;
         int16_t clear_y = label->y;

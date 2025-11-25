@@ -46,6 +46,7 @@
 //##################   Epaperdisplay类的实现 start
 #include "display/epaperdisplay/epaper_display.h"
 #include "display/epaperdisplay/epaperui.h"
+#include "display/epaperdisplay/epaper_image.h"
 #include <map>
 
 //##################   Epaperdisplay类的实现 end
@@ -69,6 +70,7 @@ public:
     EpaperLabel* GetLabel(const String& id);           // 获取 label 指针，用于修改属性
     void UpdateLabel(const String& id);                 // 刷新单个 label
     void UpdateUI(bool fullRefresh = false);            // 刷新所有 label
+    void SetPage(uint16_t page);                         // 切换页面并全局刷新
     void AddLabel(const String& id, EpaperLabel* label); // 动态添加 label
     void RemoveLabel(const String& id);                 // 移除 label
     
@@ -90,6 +92,7 @@ protected:
     // UI 管理
     std::map<String, EpaperLabel*> ui_labels_;  // 存储所有 UI 元素
     bool ui_dirty_ = false;                      // 标记是否需要刷新
+    uint16_t current_page_ = 2;                  // 当前页面
 
     // 内部渲染方法
     void RenderLabel(EpaperLabel *label); // 渲染单个 label

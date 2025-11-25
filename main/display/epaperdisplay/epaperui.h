@@ -38,6 +38,7 @@ public:
     bool mirror_h = false;  // 水平镜像
     bool mirror_v = false;  // 垂直镜像
     bool visible = true;    // 显示/隐藏属性
+    uint16_t page = 1;      // 所属页面编号
 
     // 文本属性
     String text;
@@ -68,7 +69,8 @@ public:
                             uint16_t color = GxEPD_BLACK,
                             EpaperTextAlign align = EpaperTextAlign::LEFT,
                             uint8_t rotation = 1,
-                            bool visible = true
+                            bool visible = true,
+                            uint16_t page = 1
                             ) {
         EpaperLabel obj;
         obj.type = EpaperObjectType::TEXT;
@@ -81,13 +83,14 @@ public:
         obj.align = align;
         obj.rotation = rotation;
         obj.visible = visible;
+        obj.page = page;
         return obj;
     }
 
     // 矩形
     static EpaperLabel Rect(int16_t x, int16_t y, uint16_t w, uint16_t h,
                             bool filled = false, uint16_t color = GxEPD_BLACK, uint8_t rotation = 1,
-                            bool visible = true) {
+                            bool visible = true, uint16_t page = 1) {
         EpaperLabel obj;
         obj.type = EpaperObjectType::RECT;
         obj.x = x; obj.y = y;
@@ -96,13 +99,14 @@ public:
         obj.color = color;
         obj.rotation = rotation;
         obj.visible = visible;
+        obj.page = page;
         return obj;
     }
 
     // 线段
     static EpaperLabel Line(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
                             uint16_t color = GxEPD_BLACK, uint8_t rotation = 1,
-                            bool visible = true) {
+                            bool visible = true, uint16_t page = 1) {
         EpaperLabel obj;
         obj.type = EpaperObjectType::LINE;
         obj.x = x0; obj.y = y0;
@@ -110,6 +114,7 @@ public:
         obj.color = color;
         obj.rotation = rotation;
         obj.visible = visible;
+        obj.page = page;
         return obj;
     }
 
@@ -121,7 +126,8 @@ public:
                               bool mirror_h = false,
                               bool mirror_v = false,
                               bool invert = false,
-                              bool visible = true) {
+                              bool visible = true,
+                              uint16_t page = 1) {
         EpaperLabel obj;
         obj.type = EpaperObjectType::BITMAP;
         obj.x = x; obj.y = y;
@@ -133,13 +139,14 @@ public:
         obj.mirror_v = mirror_v;
         obj.invert = invert;
         obj.visible = visible;
+        obj.page = page;
         return obj;
     }
 
     // 圆形
     static EpaperLabel Circle(int16_t x, int16_t y, uint16_t radius,
                               bool filled = false, uint16_t color = GxEPD_BLACK, uint8_t rotation = 1,
-                              bool visible = true) {
+                              bool visible = true, uint16_t page = 1) {
         EpaperLabel obj;
         obj.type = EpaperObjectType::CIRCLE;
         obj.x = x; obj.y = y;
@@ -148,6 +155,7 @@ public:
         obj.color = color;
         obj.rotation = rotation;
         obj.visible = visible;
+        obj.page = page;
         return obj;
     }
 
@@ -158,7 +166,8 @@ public:
                                 bool filled = false, 
                                 uint16_t color = GxEPD_BLACK, 
                                 uint8_t rotation = 1,
-                                bool visible = true) {
+                                bool visible = true,
+                                uint16_t page = 1) {
         EpaperLabel obj;
         obj.type = EpaperObjectType::TRIANGLE;
         obj.x = x0; obj.y = y0;
@@ -168,6 +177,7 @@ public:
         obj.color = color;
         obj.rotation = rotation;
         obj.visible = visible;
+        obj.page = page;
         return obj;
     }
 
@@ -178,7 +188,8 @@ public:
                                  bool filled = false, 
                                  uint16_t color = GxEPD_BLACK, 
                                  uint8_t rotation = 1,
-                                 bool visible = true) {
+                                 bool visible = true,
+                                 uint16_t page = 1) {
         EpaperLabel obj;
         obj.type = EpaperObjectType::ROUND_RECT;
         obj.x = x; obj.y = y;
@@ -188,6 +199,7 @@ public:
         obj.color = color;
         obj.rotation = rotation;
         obj.visible = visible;
+        obj.page = page;
         return obj;
     }
 
@@ -195,13 +207,15 @@ public:
     static EpaperLabel Pixel(int16_t x, int16_t y, 
                             uint16_t color = GxEPD_BLACK, 
                             uint8_t rotation = 1,
-                            bool visible = true) {
+                            bool visible = true,
+                            uint16_t page = 1) {
         EpaperLabel obj;
         obj.type = EpaperObjectType::PIXEL;
         obj.x = x; obj.y = y;
         obj.color = color;
         obj.rotation = rotation;
         obj.visible = visible;
+        obj.page = page;
         return obj;
     }
 
