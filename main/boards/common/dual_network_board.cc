@@ -44,12 +44,15 @@ void DualNetworkBoard::InitializeCurrentBoard() {
 
 void DualNetworkBoard::SwitchNetworkType() {
     auto display = GetDisplay();
+    auto display_epaper = GetEpaperDisplay();
     if (network_type_ == NetworkType::WIFI) {    
         SaveNetworkTypeToSettings(NetworkType::ML307);
         display->ShowNotification(Lang::Strings::SWITCH_TO_4G_NETWORK);
+        display_epaper->ShowNotification(Lang::Strings::SWITCH_TO_4G_NETWORK);
     } else {
         SaveNetworkTypeToSettings(NetworkType::WIFI);
         display->ShowNotification(Lang::Strings::SWITCH_TO_WIFI_NETWORK);
+        display_epaper->ShowNotification(Lang::Strings::SWITCH_TO_WIFI_NETWORK);
     }
     vTaskDelay(pdMS_TO_TICKS(1000));
     auto& app = Application::GetInstance();

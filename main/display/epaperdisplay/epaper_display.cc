@@ -183,7 +183,7 @@ void EpaperDisplay::SetEmotion(const char* emotion) {
     
     // 更新表情标签的位图
     emoji_image->bitmap = emotion_bitmap;
-    emoji_image->visible = true;
+    // emoji_image->visible = true;
     
     // 使用 UpdateLabel 统一刷新
     UpdateLabel("emoji_image");
@@ -544,12 +544,13 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
     display_epaper.setRotation(label->rotation);
     
     // 如果不可见，仅用白色填充区域来清除内容
-    if (!label->visible||label->page != current_page_) {
+
+    if (!label->visible) {
         // 计算需要清除的区域
         int16_t clear_x = label->x;
         int16_t clear_y = label->y;
-        uint16_t clear_w = 100;
-        uint16_t clear_h = 30;
+        uint16_t clear_w = 50;
+        uint16_t clear_h = 20;
         
         // 对于文本类型，需要动态计算边界以确保清除完整
         if (label->type == EpaperObjectType::TEXT &&
@@ -713,12 +714,17 @@ void EpaperDisplay::UpdateLabel(const String& id) {
     
     // 局部刷新：根据 label 区域设置局部窗口
     EpaperLabel* label = it->second;
+    // 页面判断，非当前页不更新
+    if (label->page != current_page_) {
+        ESP_LOGD(TAG, "Skip update for label '%s' on page %d (current %d)", id.c_str(), label->page, current_page_);
+        return;
+    }
     
     // 计算刷新区域
     int16_t refresh_x = label->x;
     int16_t refresh_y = label->y;
-    uint16_t refresh_w = 100;
-    uint16_t refresh_h = 30;
+    uint16_t refresh_w = 50;
+    uint16_t refresh_h = 20;
     
     // 如果是文本类型，需要动态计算边界
     if (label->type == EpaperObjectType::TEXT) {
@@ -751,8 +757,8 @@ void EpaperDisplay::UpdateLabel(const String& id) {
             // 如果没有设置字体，使用默认尺寸
             refresh_x = label->x;
             refresh_y = label->y - 20;
-            refresh_w = 100;
-            refresh_h = 30;
+            refresh_w = 50;
+            refresh_h = 20;
         }
     } else {
         // 其他类型使用 label 自身的尺寸
@@ -763,10 +769,7 @@ void EpaperDisplay::UpdateLabel(const String& id) {
     }
     
     // 边界检查
-    if (refresh_x < 0) refresh_x = 0;
-    if (refresh_y < 0) refresh_y = 0;
-    if (refresh_w <= 0) refresh_w = 100;  // 最小宽度
-    if (refresh_h <= 0) refresh_h = 30;   // 最小高度
+    if(refresh_x < 0||refresh_y < 0||refresh_w <= 0||refresh_h <= 0) return;
     
     display_epaper.setPartialWindow(label->x, refresh_y, refresh_w, refresh_h);
     display_epaper.firstPage();
@@ -792,7 +795,9 @@ void EpaperDisplay::UpdateUI(bool fullRefresh) {
         
         // 渲染所有 label
         for (auto& pair : ui_labels_) {
-            RenderLabel(pair.second);
+            EpaperLabel* label = pair.second;
+            if (label->page != current_page_) continue;
+            RenderLabel(label);
         }
     } while (display_epaper.nextPage());
     

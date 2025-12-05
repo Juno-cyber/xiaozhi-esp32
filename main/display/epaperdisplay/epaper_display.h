@@ -92,7 +92,7 @@ protected:
     // UI 管理
     std::map<String, EpaperLabel*> ui_labels_;  // 存储所有 UI 元素
     bool ui_dirty_ = false;                      // 标记是否需要刷新
-    uint16_t current_page_ = 2;                  // 当前页面
+    uint16_t current_page_ = 1;                  // 当前页面
 
     // 内部渲染方法
     void RenderLabel(EpaperLabel *label); // 渲染单个 label
