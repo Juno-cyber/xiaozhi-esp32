@@ -40,7 +40,6 @@
 // or select the display class and display driver class in the following file (new style):
 #include "GxEPD2_display_selection_new_style.h"
 
-#include "Bitmaps_128x296.h" // 2.9"  b/w
 //##################   墨水屏头文件 end
 
 //##################   Epaperdisplay类的实现 start
@@ -92,7 +91,7 @@ protected:
     // UI 管理
     std::map<String, EpaperLabel*> ui_labels_;  // 存储所有 UI 元素
     bool ui_dirty_ = false;                      // 标记是否需要刷新
-    uint16_t current_page_ = 2;                  // 当前页面
+    uint16_t current_page_ = 1;                  // 当前页面
 
     // 内部渲染方法
     void RenderLabel(EpaperLabel *label); // 渲染单个 label

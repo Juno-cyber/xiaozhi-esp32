@@ -35,11 +35,11 @@ EpaperDisplay::EpaperDisplay(gpio_num_t cs, gpio_num_t dc, gpio_num_t rst, gpio_
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateIdle) {
                 // 空闲状态显示时间
-                ESP_LOGI(TAG, "Showing time label");
+                ESP_LOGD(TAG, "Showing time label");
                 display->LabelShow("time_label");
             } else {
                 // 非空闲状态显示状态
-                ESP_LOGI(TAG, "Showing status label");
+                ESP_LOGD(TAG, "Showing status label");
                 display->LabelShow("status_label");
             }
         },
@@ -183,7 +183,7 @@ void EpaperDisplay::SetEmotion(const char* emotion) {
     
     // 更新表情标签的位图
     emoji_image->bitmap = emotion_bitmap;
-    emoji_image->visible = true;
+    // emoji_image->visible = true;
     
     // 使用 UpdateLabel 统一刷新
     UpdateLabel("emoji_image");
@@ -335,7 +335,8 @@ void EpaperDisplay::UpdateStatusBar(bool update_all) {
                 // 更新 time_label 的文本
                 auto* time_label = GetLabel("time_label");
                 if (time_label) {
-                    time_label->text = String(time_str);                    
+                    time_label->text = String(time_str);   
+                    ESP_LOGI(TAG, "Updating time label to: %s", time_str);                 
                     // 隐藏通知和状态，显示时间
                     auto* notification_label = GetLabel("notification_label");
                     if (notification_label && notification_label->visible) {
@@ -393,7 +394,7 @@ void EpaperDisplay::SetupUI() {
     // 1.4 时间标签（time_label） - 居中显示
     AddLabel("time_label",
              new EpaperLabel(EpaperLabel::Text(
-                 "05:20", 98, 25, 100,0, u8g2_font_freedoomr25_mn, GxEPD_BLACK,
+                 "05:20", 98, 25, 100,25, u8g2_font_freedoomr25_mn, GxEPD_BLACK,
                  EpaperTextAlign::CENTER, 1, true, 1)));
     
     // 1.5 静音图标 (mute_label)
@@ -407,7 +408,7 @@ void EpaperDisplay::SetupUI() {
     
     // 1.7 状态栏分隔线
     AddLabel("status_bar_divider", new EpaperLabel(
-        EpaperLabel::Line(10, 40, 286, 40, GxEPD_BLACK, 1, true, 1)));
+        EpaperLabel::Line(10, 31, 286, 31, GxEPD_BLACK, 1, true, 1)));
     
     // ===== 2. 内容区 (content) =====
     // 位置：状态栏下方，占据剩余空间 (y: 25 ~ 128)
@@ -544,26 +545,88 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
     display_epaper.setRotation(label->rotation);
     
     // 如果不可见，仅用白色填充区域来清除内容
-    if (!label->visible||label->page != current_page_) {
+    if (!label->visible) {
         // 计算需要清除的区域
         int16_t clear_x = label->x;
         int16_t clear_y = label->y;
-        uint16_t clear_w = 100;
-        uint16_t clear_h = 30;
+        uint16_t clear_w = 0;
+        uint16_t clear_h = 0;
         
-        // 对于文本类型，需要动态计算边界以确保清除完整
-        if (label->type == EpaperObjectType::TEXT &&
-            label->u8g2_font != nullptr) {
-            // 保存旧的宽度和高度
-            uint16_t old_h = label->h;
-            auto bounds = CalculateTextBounds(label);
-            uint16_t new_h = bounds.h;            
-            clear_x = label->x;
-            clear_y = label->y;
-            clear_w = label->w_max;  // 取较大的宽度
-            clear_h = (old_h > new_h) ? old_h : new_h; // 取较大的高度
-            // 更新 label 的 h 为新计算的值
-            label->h = new_h;            
+        // 根据标签类型确定清除区域
+        switch (label->type) {
+            case EpaperObjectType::TEXT: {
+                // 对于文本类型，需要动态计算边界以确保清除完整
+                if (label->u8g2_font != nullptr) {
+                    auto bounds = CalculateTextBounds(label);
+                    clear_x = bounds.x;
+                    clear_y = bounds.y;
+                    clear_w = bounds.w;
+                    clear_h = bounds.h;
+                } else {
+                    // 如果没有字体信息，使用默认大小
+                    clear_w = (label->w_max > 0) ? label->w_max : 50;
+                    clear_h = 20;
+                }
+                break;
+            }
+                
+            case EpaperObjectType::BITMAP:
+            case EpaperObjectType::RECT:
+            case EpaperObjectType::ROUND_RECT: {
+                // 对于这些类型，直接使用标签的 w 和 h 属性
+                clear_w = label->w;
+                clear_h = label->h;
+                break;
+            }
+                
+            case EpaperObjectType::LINE: {
+                // 对于线条，计算包围盒
+                int16_t min_x = std::min(label->x, label->x1);
+                int16_t max_x = std::max(label->x, label->x1);
+                int16_t min_y = std::min(label->y, label->y1);
+                int16_t max_y = std::max(label->y, label->y1);
+                clear_x = min_x;
+                clear_y = min_y;
+                clear_w = max_x - min_x + 1;
+                clear_h = max_y - min_y + 1;
+                break;
+            }
+                
+            case EpaperObjectType::CIRCLE: {
+                // 对于圆形，计算包围盒
+                clear_x = label->x - label->radius;
+                clear_y = label->y - label->radius;
+                clear_w = label->radius * 2 + 1;
+                clear_h = label->radius * 2 + 1;
+                break;
+            }
+                
+            case EpaperObjectType::TRIANGLE: {
+                // 对于三角形，计算包围盒
+                int16_t min_x = std::min({label->x, label->x1, label->x2});
+                int16_t max_x = std::max({label->x, label->x1, label->x2});
+                int16_t min_y = std::min({label->y, label->y1, label->y2});
+                int16_t max_y = std::max({label->y, label->y1, label->y2});
+                clear_x = min_x;
+                clear_y = min_y;
+                clear_w = max_x - min_x + 1;
+                clear_h = max_y - min_y + 1;
+                break;
+            }
+                
+            case EpaperObjectType::PIXEL: {
+                // 对于像素点，只清除单个像素
+                clear_w = 1;
+                clear_h = 1;
+                break;
+            }
+                
+            default: {
+                // 默认情况使用较小的清除区域
+                clear_w = 50;
+                clear_h = 20;
+                break;
+            }
         }
         
         // 用白色填充区域（清除）
@@ -713,12 +776,17 @@ void EpaperDisplay::UpdateLabel(const String& id) {
     
     // 局部刷新：根据 label 区域设置局部窗口
     EpaperLabel* label = it->second;
+    // 页面判断，非当前页不更新
+    if (label->page != current_page_) {
+        ESP_LOGD(TAG, "Skip update for label '%s' on page %d (current %d)", id.c_str(), label->page, current_page_);
+        return;
+    }
     
     // 计算刷新区域
     int16_t refresh_x = label->x;
     int16_t refresh_y = label->y;
-    uint16_t refresh_w = 100;
-    uint16_t refresh_h = 30;
+    uint16_t refresh_w = 50;
+    uint16_t refresh_h = 20;
     
     // 如果是文本类型，需要动态计算边界
     if (label->type == EpaperObjectType::TEXT) {
@@ -745,14 +813,13 @@ void EpaperDisplay::UpdateLabel(const String& id) {
             // 更新 label 的 h 为新计算的值
             label->h = new_h;
             
-            ESP_LOGI(TAG, "Label '%s' old_h=%d, new: w=%d h=%d, refresh: w=%d h=%d", 
-                     id.c_str(), old_h, new_w, new_h, refresh_w, refresh_h);
+            ESP_LOGD(TAG, "Label '%s',refresh_x=%d,refresh_y=%d, old_h=%d, new: w=%d h=%d, refresh: w=%d h=%d", 
+                     id.c_str(), refresh_x, refresh_y, old_h, new_w, new_h, refresh_w, refresh_h);
         } else {
-            // 如果没有设置字体，使用默认尺寸
             refresh_x = label->x;
             refresh_y = label->y - 20;
-            refresh_w = 100;
-            refresh_h = 30;
+            refresh_w = 50;
+            refresh_h = 20;
         }
     } else {
         // 其他类型使用 label 自身的尺寸
@@ -763,15 +830,15 @@ void EpaperDisplay::UpdateLabel(const String& id) {
     }
     
     // 边界检查
-    if (refresh_x < 0) refresh_x = 0;
-    if (refresh_y < 0) refresh_y = 0;
-    if (refresh_w <= 0) refresh_w = 100;  // 最小宽度
-    if (refresh_h <= 0) refresh_h = 30;   // 最小高度
+    if(refresh_x < 0||refresh_y < 0||refresh_w <= 0||refresh_h <= 0)
+    {
+        return;
+    }
     
     display_epaper.setPartialWindow(label->x, refresh_y, refresh_w, refresh_h);
     display_epaper.firstPage();
     do {
-        display_epaper.fillScreen(GxEPD_WHITE);  // 清空局部区域
+        // display_epaper.fillScreen(GxEPD_WHITE);  // 清空局部区域
         RenderLabel(label);
     } while (display_epaper.nextPage());
 }
@@ -792,7 +859,9 @@ void EpaperDisplay::UpdateUI(bool fullRefresh) {
         
         // 渲染所有 label
         for (auto& pair : ui_labels_) {
-            RenderLabel(pair.second);
+            EpaperLabel* label = pair.second;
+            if (label->page != current_page_) continue;
+            RenderLabel(label);
         }
     } while (display_epaper.nextPage());
     
@@ -961,12 +1030,11 @@ EpaperDisplay::TextBounds EpaperDisplay::CalculateTextBounds(EpaperLabel* label)
             bounds_x = label->x - text_w;
 
         bounds.x = bounds_x;
-        bounds.y = label->y - ascent;
+        bounds.y = (label->y > ascent) ? (label->y - ascent) : 0;
         bounds.w = text_w;
         bounds.h = line_height;
         return bounds;
     }
-
     // --- ②：有宽度限制，先测单行是否 fits ---
     int16_t total_width = u8g2_for_gfx.getUTF8Width(label->text.c_str());
     if (total_width <= label->w_max) {
@@ -977,7 +1045,7 @@ EpaperDisplay::TextBounds EpaperDisplay::CalculateTextBounds(EpaperLabel* label)
             bounds_x = label->x + label->w_max - total_width;
 
         bounds.x = bounds_x;
-        bounds.y = label->y - ascent;
+        bounds.y = (label->y > ascent) ? (label->y - ascent) : 0;
         bounds.w = total_width;
         bounds.h = line_height;
         return bounds;
@@ -1044,7 +1112,7 @@ EpaperDisplay::TextBounds EpaperDisplay::CalculateTextBounds(EpaperLabel* label)
         bounds_x = label->x + label->w_max - max_width;
 
     bounds.x = bounds_x;
-    bounds.y = label->y - ascent;
+    bounds.y = (label->y > ascent) ? (label->y - ascent) : 0;
     bounds.w = max_width;          // 重要修正：非 label->w
     bounds.h = line_count * line_height;
 
