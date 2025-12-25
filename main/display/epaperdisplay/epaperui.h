@@ -45,15 +45,16 @@ public:
     const uint8_t* u8g2_font = nullptr;         // U8g2 字体指针
     EpaperTextAlign align = EpaperTextAlign::LEFT;
     uint16_t w_max = 0;  // 文本最大宽度限制（用于换行）
+    bool invert = false;     // 文本反色（背景色与前景色互换）
 
     // 位图属性
     const uint8_t* bitmap = nullptr;
     uint16_t depth = 1;      // 1=黑白, 3=三色, 7=七色
-    bool invert = false;     // 反色
 
     // 线段/三角形属性
     int16_t x1 = 0, y1 = 0;
     int16_t x2 = 0, y2 = 0;  // 三角形第三个点
+    uint8_t width = 1;        // 线宽（用于 LINE 类型）
     
     // 矩形/圆形属性
     bool filled = false;
@@ -64,18 +65,26 @@ public:
     // --- 工厂函数们 ---
     
     // 文本（统一使用 U8g2 字体，支持中英文）
-    static EpaperLabel Text(const String& text, int16_t x, int16_t y,uint16_t max_width,uint16_t h,
+    // 参数说明：
+    //   x, y: 文本左上角位置（与其他 label 类型保持一致）
+    //   max_width: 文本最大宽度限制（用于换行），0表示不限制
+    //   font_height: 字体高度（用于计算实际绘制的y坐标偏移）
+    //   h: 文本框高度（用于垂直对齐等）
+    static EpaperLabel Text(const String& text, int16_t x, int16_t y, uint16_t max_width, uint16_t h, uint16_t font_height,
                             const uint8_t* u8g2_font,
                             uint16_t color = GxEPD_BLACK,
                             EpaperTextAlign align = EpaperTextAlign::LEFT,
                             uint8_t rotation = 1,
                             bool visible = true,
+                            bool invert = false,                            
                             uint16_t page = 1
                             ) {
         EpaperLabel obj;
         obj.type = EpaperObjectType::TEXT;
         obj.text = text;
-        obj.x = x; obj.y = y;
+        obj.x = x; 
+        // 自动调整 y 坐标：由于文本从基线开始绘制，需要加上字体高度以对齐到左上角
+        obj.y = y + font_height;
         obj.w_max = max_width; // 使用 w_max 存储最大宽度限制
         obj.h = h;        
         obj.u8g2_font = u8g2_font;
@@ -83,6 +92,7 @@ public:
         obj.align = align;
         obj.rotation = rotation;
         obj.visible = visible;
+        obj.invert = invert;        
         obj.page = page;
         return obj;
     }
@@ -104,13 +114,14 @@ public:
     }
 
     // 线段
-    static EpaperLabel Line(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
+    static EpaperLabel Line(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint8_t w,
                             uint16_t color = GxEPD_BLACK, uint8_t rotation = 1,
                             bool visible = true, uint16_t page = 1) {
         EpaperLabel obj;
         obj.type = EpaperObjectType::LINE;
         obj.x = x0; obj.y = y0;
         obj.x1 = x1; obj.y1 = y1;
+        obj.width = w;
         obj.color = color;
         obj.rotation = rotation;
         obj.visible = visible;

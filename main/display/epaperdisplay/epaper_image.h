@@ -68,6 +68,30 @@ extern const unsigned char EMO_CONFIDENT_32x32[128] PROGMEM;    // 😏 CONFIDEN
 extern const unsigned char EMO_SLEEPY_32x32[128] PROGMEM;       // 😴 SLEEPY
 extern const unsigned char EMO_SILLY_32x32[128] PROGMEM;        // 😜 SILLY
 extern const unsigned char EMO_CONFUSED_32x32[128] PROGMEM;     // 🙄 CONFUSED
+
+// ============ 冰箱的icon (32x32) ============
+extern const unsigned char Fridge_32x32[128] PROGMEM;           // 冰箱
+extern const unsigned char Fridge_warning_32x32[128] PROGMEM;          // 告警
+extern const unsigned char Fridge_category_32x32[128] PROGMEM;          // 分类
+// ============ 冰箱的icon (24x24) ============
+extern const unsigned char Fridge_24x24[72] PROGMEM;           // 冰箱
+extern const unsigned char Fridge_warning_24x24[72] PROGMEM;          // 告警
+extern const unsigned char Fridge_category_24x24[72] PROGMEM;          // 分类
+// ============ 食材icon (24x24) ============
+extern const unsigned char food_vegetable_24x24[72] PROGMEM;     // 蔬菜
+extern const unsigned char food_fruit_24x24[72] PROGMEM;         // 水果
+extern const unsigned char food_meat_24x24[72] PROGMEM;           // 肉类
+extern const unsigned char food_egg_24x24[72] PROGMEM;            // 蛋类
+extern const unsigned char food_dairy_24x24[72] PROGMEM;          // 乳制品
+extern const unsigned char food_cooked_24x24[72] PROGMEM;         // 熟食
+extern const unsigned char food_seasoning_24x24[72] PROGMEM;      // 调味
+extern const unsigned char food_beverage_24x24[72] PROGMEM;       // 饮料
+extern const unsigned char food_quick_24x24[72] PROGMEM;         // 速食食品
+extern const unsigned char food_other_24x24[72] PROGMEM;          // 其他
+// ============ 食材icon (72x72) ============
+extern const unsigned char food_cooker_72x72[648] PROGMEM;          // cooker
 }  // namespace EpaperImage
+
+
 
 #endif  // _EpaperImage_H_

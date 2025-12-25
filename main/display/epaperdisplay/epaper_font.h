@@ -3,8 +3,8 @@
 // ===============================
 //   Siji 图标字体索引定义
 // ===============================
-// 使用 u8g2_font_siji_t_6x10 字体
-
+// 使用 u8g2 中的字体
+extern const uint8_t u8g2_font_mystery_quest_56_tn[] U8G2_FONT_SECTION("u8g2_font_mystery_quest_56_tn");
 namespace EpaperFont {
 
 // WiFi 图标 (Siji字体)

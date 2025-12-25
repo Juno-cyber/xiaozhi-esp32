@@ -349,6 +349,11 @@ void EpaperDisplay::UpdateStatusBar(bool update_all) {
                     // 显示时间标签
                     LabelShow("time_label");
                 }
+                // 同步更新 home_time
+                if (auto* home_time = GetLabel("home_time")) {
+                    home_time->text = String(time_str);
+                    LabelShow("home_time");
+                }                
                 
                 last_status_update_time_ = std::chrono::system_clock::now();
             } else {
@@ -383,24 +388,24 @@ void EpaperDisplay::SetupUI() {
     
     // 1.2 通知文本 (notification_label) - 默认隐藏
     AddLabel("notification_label", new EpaperLabel(
-        EpaperLabel::Text("", 88, 15, 120,0, u8g2_font_wqy12_t_gb2312, 
-                         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, false, 1)));
+        EpaperLabel::Text("", 88, 5, 120, 12, 12, u8g2_font_wqy12_t_gb2312, 
+                         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, false, false, 1)));
     
     // 1.3 状态标签 (status_label) - 居中显示
     AddLabel("status_label",
              new EpaperLabel(EpaperLabel::Text(
-                 "waiting", 98, 15, 100,0, u8g2_font_wqy12_t_gb2312, GxEPD_BLACK,
-                 EpaperTextAlign::CENTER, 1, true, 1)));
+                 "waiting", 98, 5, 100, 12, 12, u8g2_font_wqy12_t_gb2312, GxEPD_BLACK,
+                 EpaperTextAlign::CENTER, 1, true, false, 1)));
     // 1.4 时间标签（time_label） - 居中显示
     AddLabel("time_label",
              new EpaperLabel(EpaperLabel::Text(
-                 "05:20", 98, 25, 100,25, u8g2_font_freedoomr25_mn, GxEPD_BLACK,
-                 EpaperTextAlign::CENTER, 1, true, 1)));
+                 "05:20", 98, 0, 100, 26, 26, u8g2_font_freedoomr25_mn, GxEPD_BLACK,
+                 EpaperTextAlign::CENTER, 1, true, true, 1)));
     
     // 1.5 静音图标 (mute_label)
     AddLabel("mute_label", new EpaperLabel(
-        EpaperLabel::Text("", 260, 15, 0,0, u8g2_font_emoticons21_tr, 
-                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, 1)));
+        EpaperLabel::Text("", 260, 15, 0, 0, 21, u8g2_font_emoticons21_tr, 
+                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 1)));
     
     // 1.6 电池图标 (battery_label)
     AddLabel("battery_label", new EpaperLabel(
@@ -408,7 +413,7 @@ void EpaperDisplay::SetupUI() {
     
     // 1.7 状态栏分隔线
     AddLabel("status_bar_divider", new EpaperLabel(
-        EpaperLabel::Line(10, 31, 286, 31, GxEPD_BLACK, 1, true, 1)));
+        EpaperLabel::Line(10, 31, 286, 31, 2, GxEPD_BLACK, 1, true, 1)));
     
     // ===== 2. 内容区 (content) =====
     // 位置：状态栏下方，占据剩余空间 (y: 25 ~ 128)
@@ -416,8 +421,8 @@ void EpaperDisplay::SetupUI() {
     // 2.1 表情容器 (emoji_box)
     // 2.1.1 表情图标 (emoji_label) - 中央显示
     AddLabel("emoji_label", new EpaperLabel(
-        EpaperLabel::Text(EpaperFont::Emoticons::NEUTRAL, 193, 60, 30,21, u8g2_font_emoticons21_tr, 
-                         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, false, 1)));
+        EpaperLabel::Text(EpaperFont::Emoticons::NEUTRAL, 193, 60, 30, 21, 21, u8g2_font_emoticons21_tr, 
+                         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, false, false, 1)));
     
     // 2.1.2 表情图片 (emoji_image) - 默认隐藏
     // 注：墨水屏位图需要实际资源，这里先占位
@@ -430,8 +435,8 @@ void EpaperDisplay::SetupUI() {
     
     // 2.3 聊天消息 (chat_message_label)
     AddLabel("chat_message_label", new EpaperLabel(
-        EpaperLabel::Text("", 28, 85, 240,0, u8g2_font_wqy16_t_gb2312, 
-                         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, 1)));
+        EpaperLabel::Text("", 28, 85, 240, 0, 16, u8g2_font_wqy16_t_gb2312, 
+                         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 1)));
     
     // ===== 3. 低电量弹窗 (low_battery_popup) - 默认隐藏 =====
     // 位置：底部居中
@@ -439,16 +444,149 @@ void EpaperDisplay::SetupUI() {
         EpaperLabel::RoundRect(20, 100, 256, 20, 6, true, GxEPD_BLACK, 1, false, 1)));
     
     AddLabel("low_battery_label", new EpaperLabel(
-        EpaperLabel::Text("电量低，请充电", 103, 113, 90,0, u8g2_font_wqy16_t_gb2312, 
-                         GxEPD_WHITE, EpaperTextAlign::CENTER, 1, false, 1)));
+        EpaperLabel::Text("电量低，请充电", 103, 113, 90, 0, 16, u8g2_font_wqy16_t_gb2312, 
+                         GxEPD_WHITE, EpaperTextAlign::CENTER, 1, false, false, 1)));
 // ==========================================================page 1 end==========================================================    
-// ==========================================================page 2 start========================================================
-    AddLabel("status_bar_divider_2", new EpaperLabel(
-        EpaperLabel::Line(10, 40, 286, 40, GxEPD_BLACK, 1, true, 2)));
-
+// ==========================================================page 2：HOME DashBoard start========================================================
+    
+    // ===== 2.1 页面分隔线 =====
+    AddLabel("home_line_1", new EpaperLabel(EpaperLabel::Line(10, 30, 286, 30, 2, GxEPD_BLACK, 1, true, 2)));    // 水平分隔线
+    AddLabel("home_line_2", new EpaperLabel(EpaperLabel::Line(190, 35, 190, 120, 2, GxEPD_BLACK, 1, true, 2))); // 竖直分隔线
+    AddLabel("home_line_3", new EpaperLabel(EpaperLabel::Line(10, 100, 150, 100, 1, GxEPD_BLACK, 1, true, 2))); // 内部分隔线
+    
+    // ===== 2.2 时间区域（顶部左侧） =====
+    AddLabel("home_slogan_1", new EpaperLabel(EpaperLabel::Text("今天吃什么?", 5, 4, 100, 16, 16, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
+    AddLabel("home_time", new EpaperLabel(EpaperLabel::Text("05:20", 5, 40, 150, 45, 45, u8g2_font_mystery_quest_56_tn, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, true, 2)));  
+    AddLabel("home_date", new EpaperLabel(EpaperLabel::Text("SAT/NOV 22", 20, 105, 120, 18, 18, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
+    
+    // ===== 2.3 状态栏（顶部右侧） =====
+    AddLabel("home_battery", new EpaperLabel(EpaperLabel::Bitmap(270, 0, EpaperImage::battery_full_24x24, 24, 24, 1, 1, false, false, false, true, 2)));
+    AddLabel("home_network", new EpaperLabel(EpaperLabel::Bitmap(240, 0, EpaperImage::wifi_full_24x24, 24, 24, 1, 1, false, false, false, true, 2)));
+    
+    // ===== 2.4 冰箱统计区域（右侧列表） =====
+    // 冰箱图标
+    AddLabel("home_Fridge", new EpaperLabel(EpaperLabel::Bitmap(200, 35, EpaperImage::Fridge_24x24, 24, 24, 1, 1, false, false, false, true, 2)));
+    AddLabel("home_total_items", new EpaperLabel(EpaperLabel::Text("24 件", 230, 38, 50, 18, 18, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
+    
+    // 分类图标
+    AddLabel("home_Fridge_category", new EpaperLabel(EpaperLabel::Bitmap(200, 65, EpaperImage::Fridge_category_24x24, 24, 24, 1, 1, false, false, false, true, 2)));
+    AddLabel("home_total_category", new EpaperLabel(EpaperLabel::Text("7 类", 230, 67, 50, 18, 18, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
+    
+    // 过期警告图标
+    AddLabel("home_Fridge_warning", new EpaperLabel(EpaperLabel::Bitmap(200, 95, EpaperImage::Fridge_warning_24x24, 24, 24, 1, 1, false, false, false, true, 2)));
+    AddLabel("home_total_warning", new EpaperLabel(EpaperLabel::Text("3 过期", 230, 98, 50, 18, 18, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
     
 // ==========================================================page 2 end==========================================================
-    ui_dirty_ = true;
+// ==========================================================page 3：Food list start=============================================
+    
+    // ===== 3.1 页面标题栏 =====
+    // 标题：冰箱食材 + 图标
+    AddLabel("fridge_list_icon", new EpaperLabel(EpaperLabel::Bitmap(10, 2, EpaperImage::Fridge_24x24, 24, 24, 1, 1, false, false, false, true, 3)));
+    
+    AddLabel("fridge_list_title", new EpaperLabel(EpaperLabel::Text("冰箱食材", 40, 4, 200, 24, 16, u8g2_font_wqy16_t_gb2312,GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 3)));
+    
+    // 标题分隔线
+    AddLabel("fridge_list_divider", new EpaperLabel(EpaperLabel::Line(10, 32, 286, 32, 2, GxEPD_BLACK, 1, true, 3)));
+    
+    // ===== 3.2 食材列表项（最多显示4行，每行高度约18像素） =====
+    // 第一行食材
+    AddLabel("item_icon_1", new EpaperLabel(
+        EpaperLabel::Bitmap(10, 35, EpaperImage::food_vegetable_24x24, 24, 24, 1, 1, false, false, false, true, 3)));
+    AddLabel("item_name_1", new EpaperLabel(
+        EpaperLabel::Text("青菜", 40, 37, 120, 18, 16, u8g2_font_wqy16_t_gb2312, 
+                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 3)));
+    AddLabel("item_qty_1", new EpaperLabel(
+        EpaperLabel::Text("500g", 160, 37, 50, 18, 16, u8g2_font_wqy16_t_gb2312, 
+                         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 3)));
+    AddLabel("item_status_1", new EpaperLabel(
+        EpaperLabel::Text("新鲜", 220, 37, 60, 18, 16, u8g2_font_wqy16_t_gb2312, 
+                         GxEPD_BLACK, EpaperTextAlign::RIGHT, 1, true, false, 3)));
+    
+    // 第二行食材
+    AddLabel("item_icon_2", new EpaperLabel(
+        EpaperLabel::Bitmap(10, 58, EpaperImage::food_egg_24x24, 24, 24, 1, 1, false, false, false, true, 3)));
+    AddLabel("item_name_2", new EpaperLabel(
+        EpaperLabel::Text("鸡蛋", 40, 60, 120, 18, 16, u8g2_font_wqy16_t_gb2312, 
+                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 3)));
+    AddLabel("item_qty_2", new EpaperLabel(
+        EpaperLabel::Text("10个", 160, 60, 50, 18, 16, u8g2_font_wqy16_t_gb2312, 
+                         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 3)));
+    AddLabel("item_status_2", new EpaperLabel(
+        EpaperLabel::Text("新鲜", 220, 60, 60, 18, 16, u8g2_font_wqy16_t_gb2312, 
+                         GxEPD_BLACK, EpaperTextAlign::RIGHT, 1, true, false, 3)));
+    
+    // 第三行食材
+    AddLabel("item_icon_3", new EpaperLabel(
+        EpaperLabel::Bitmap(10, 81, EpaperImage::food_dairy_24x24, 24, 24, 1, 1, false, false, false, true, 3)));
+    AddLabel("item_name_3", new EpaperLabel(
+        EpaperLabel::Text("牛奶", 40, 83, 120, 18, 16, u8g2_font_wqy16_t_gb2312, 
+                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 3)));
+    AddLabel("item_qty_3", new EpaperLabel(
+        EpaperLabel::Text("500ml", 160, 83, 50, 18, 16, u8g2_font_wqy16_t_gb2312, 
+                         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 3)));
+    AddLabel("item_status_3", new EpaperLabel(
+        EpaperLabel::Text("即将过期", 220, 83, 60, 14, 14, u8g2_font_wqy12_t_gb2312, 
+                         GxEPD_BLACK, EpaperTextAlign::RIGHT, 1, true, false, 3)));
+    
+    // 第四行食材
+    AddLabel("item_icon_4", new EpaperLabel(
+        EpaperLabel::Bitmap(10, 104, EpaperImage::food_cooked_24x24, 24, 24, 1, 1, false, false, false, true, 3)));
+    AddLabel("item_name_4", new EpaperLabel(
+        EpaperLabel::Text("米饭", 40, 106, 120, 18, 16, u8g2_font_wqy16_t_gb2312, 
+                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 3)));
+    AddLabel("item_qty_4", new EpaperLabel(
+        EpaperLabel::Text("2kg", 160, 106, 50, 18, 16, u8g2_font_wqy16_t_gb2312, 
+                         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 3)));
+    AddLabel("item_status_4", new EpaperLabel(
+        EpaperLabel::Text("过期", 220, 106, 60, 18, 16, u8g2_font_wqy16_t_gb2312, 
+                         GxEPD_BLACK, EpaperTextAlign::RIGHT, 1, true, false, 3)));
+
+// ==========================================================page 3 end=============================================
+// ==========================================================page 4：AI Recipe start=============================================
+    
+    // ===== 4.1 左侧推荐食品大图 =====
+    // 图片占据左半部分（约宽150像素）
+    AddLabel("recipe_food_image", new EpaperLabel(
+        EpaperLabel::Bitmap(10, 35, EpaperImage::food_cooker_72x72, 72, 72, 1, 1, false, false, false, true, 4)));
+    
+    // ===== 4.2 右侧分隔线 =====
+    AddLabel("recipe_divider", new EpaperLabel(
+        EpaperLabel::Line(165, 35, 165, 120, 2, GxEPD_BLACK, 1, true, 4)));
+    
+    // ===== 4.3 右侧烹饪信息 =====
+    // 食品名称
+    AddLabel("recipe_food_name", new EpaperLabel(
+        EpaperLabel::Text("番茄鸡蛋汤", 175, 37, 110, 20, 16, u8g2_font_wqy16_t_gb2312, 
+                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 4)));
+    
+    // 烹饪时间标签
+    AddLabel("recipe_time_label", new EpaperLabel(
+        EpaperLabel::Text("耗时:", 175, 55, 35, 16, 12, u8g2_font_wqy12_t_gb2312, 
+                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 4)));
+    AddLabel("recipe_time_value", new EpaperLabel(
+        EpaperLabel::Text("15分钟", 215, 55, 70, 16, 12, u8g2_font_wqy12_t_gb2312, 
+                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 4)));
+    
+    // 消耗食材标签
+    AddLabel("recipe_ingredients_label", new EpaperLabel(
+        EpaperLabel::Text("食材:", 175, 70, 35, 16, 12, u8g2_font_wqy12_t_gb2312, 
+                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 4)));
+    
+    // 消耗食材列表（最多显示2-3行）
+    AddLabel("recipe_ingredient_1", new EpaperLabel(
+        EpaperLabel::Text("番茄×2", 175, 85, 110, 14, 12, u8g2_font_wqy12_t_gb2312, 
+                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 4)));
+    AddLabel("recipe_ingredient_2", new EpaperLabel(
+        EpaperLabel::Text("鸡蛋×3", 175, 100, 110, 14, 12, u8g2_font_wqy12_t_gb2312, 
+                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 4)));
+    AddLabel("recipe_ingredient_3", new EpaperLabel(
+        EpaperLabel::Text("盐/味精", 175, 115, 110, 14, 12, u8g2_font_wqy12_t_gb2312, 
+                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 4)));
+
+// ==========================================================page 4 end=====================================================    
+
+
+ui_dirty_ = true;
 }
 
 void EpaperDisplay::SetPowerSaveMode(bool on) {
@@ -580,15 +718,15 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
             }
                 
             case EpaperObjectType::LINE: {
-                // 对于线条，计算包围盒
+                // 对于线条，计算包围盒，考虑线寽
                 int16_t min_x = std::min(label->x, label->x1);
                 int16_t max_x = std::max(label->x, label->x1);
                 int16_t min_y = std::min(label->y, label->y1);
                 int16_t max_y = std::max(label->y, label->y1);
-                clear_x = min_x;
-                clear_y = min_y;
-                clear_w = max_x - min_x + 1;
-                clear_h = max_y - min_y + 1;
+                clear_x = min_x - label->width / 2;
+                clear_y = min_y - label->width / 2;
+                clear_w = max_x - min_x + label->width;
+                clear_h = max_y - min_y + label->width;
                 break;
             }
                 
@@ -641,7 +779,18 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
             // 统一使用 U8g2 字体渲染（支持中英文）
             if (label->u8g2_font != nullptr) {
                 u8g2_for_gfx.setFont(label->u8g2_font);
-                u8g2_for_gfx.setForegroundColor(label->color);
+                
+                // 如果启用了反色，先填充背景
+                if (label->invert) {
+                    // 计算文本边界以确定背景填充区域
+                    auto bounds = CalculateTextBounds(label);
+                    uint16_t bg_color = (label->color == GxEPD_BLACK) ? GxEPD_BLACK : GxEPD_WHITE;
+                    display_epaper.fillRect(bounds.x, bounds.y, bounds.w, bounds.h, bg_color);
+                }
+                
+                u8g2_for_gfx.setForegroundColor(label->invert ? 
+                    ((label->color == GxEPD_BLACK) ? GxEPD_WHITE : GxEPD_BLACK) : 
+                    label->color);
                 
                 // 如果设置了最大宽度限制，执行换行逻辑
                 if (label->w_max > 0) {
@@ -674,7 +823,33 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
         }
             
         case EpaperObjectType::LINE: {
-            display_epaper.drawLine(label->x, label->y, label->x1, label->y1, label->color);
+            // 平行估綗：简化处理线寽，针对水平线和端切线
+            if (label->width <= 1) {
+                // 单像素线条
+                display_epaper.drawLine(label->x, label->y, label->x1, label->y1, label->color);
+            } else {
+                // 根据线段水平/端切方向绘制多条线
+                int16_t dx = label->x1 - label->x;
+                int16_t dy = label->y1 - label->y;
+                
+                // 水平线或端切线
+                if (dx == 0) {
+                    // 端切线（竫直）- 根据线寽扩展 x
+                    for (int16_t offset = 0; offset < label->width; offset++) {
+                        int16_t draw_x = label->x - label->width / 2 + offset;
+                        display_epaper.drawLine(draw_x, label->y, draw_x, label->y1, label->color);
+                    }
+                } else if (dy == 0) {
+                    // 水平线 - 根据线寽扩展 y
+                    for (int16_t offset = 0; offset < label->width; offset++) {
+                        int16_t draw_y = label->y - label->width / 2 + offset;
+                        display_epaper.drawLine(label->x, draw_y, label->x1, draw_y, label->color);
+                    }
+                } else {
+                    // 云字线，仅绘制中心线
+                    display_epaper.drawLine(label->x, label->y, label->x1, label->y1, label->color);
+                }
+            }
             break;
         }
             
@@ -813,7 +988,7 @@ void EpaperDisplay::UpdateLabel(const String& id) {
             // 更新 label 的 h 为新计算的值
             label->h = new_h;
             
-            ESP_LOGD(TAG, "Label '%s',refresh_x=%d,refresh_y=%d, old_h=%d, new: w=%d h=%d, refresh: w=%d h=%d", 
+            ESP_LOGI(TAG, "Label '%s',refresh_x=%d,refresh_y=%d, old_h=%d, new: w=%d h=%d, refresh: w=%d h=%d", 
                      id.c_str(), refresh_x, refresh_y, old_h, new_w, new_h, refresh_w, refresh_h);
         } else {
             refresh_x = label->x;
@@ -1017,7 +1192,9 @@ EpaperDisplay::TextBounds EpaperDisplay::CalculateTextBounds(EpaperLabel* label)
     
     int16_t ascent  = u8g2_for_gfx.getFontAscent();
     int16_t descent = u8g2_for_gfx.getFontDescent();
-    int16_t line_height = ascent - descent + 2; // 推荐换行高度（更稳定）
+    // 优先使用设置的高度参数 label->h，这是用户期望的清除区域高度
+    int16_t line_height = (label->h > 0) ? label->h : (ascent + abs(descent));
+    ESP_LOGI(TAG, "ascent=%d, descent=%d, set_height=%d, use_height=%d", ascent, descent, label->h, line_height);
 
     // --- ①：如果 w_max==0 → 单行文本 ---
     if (label->w_max == 0) {
