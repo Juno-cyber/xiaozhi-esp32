@@ -48,6 +48,7 @@
 //##################   Epaperdisplay类的实现 start
 #include "display/epaperdisplay/epaperui.h"
 #include "display/epaperdisplay/epaper_image.h"
+#include "../boards/bread-compact-wifi-epaperx/Fridge/fridge_manager.h"
 #include <map>
 
 //##################   Epaperdisplay类的实现 end

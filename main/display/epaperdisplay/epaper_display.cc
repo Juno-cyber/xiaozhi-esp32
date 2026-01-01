@@ -3,6 +3,7 @@
 #include <string>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <vector>
 #include <algorithm>
 
@@ -11,6 +12,8 @@
 #include "settings.h"
 #include "epaper_display.h"
 #include "epaper_font.h"
+#include "../boards/bread-compact-wifi-epaperx/Fridge/fridge_item.h"
+#include "../boards/bread-compact-wifi-epaperx/Fridge/fridge_manager.h"
 
 #define TAG "EpaperDisplay"
 
@@ -400,7 +403,7 @@ void EpaperDisplay::SetupUI() {
     AddLabel("time_label",
              new EpaperLabel(EpaperLabel::Text(
                  "05:20", 98, 0, 100, 26, 26, u8g2_font_freedoomr25_mn, GxEPD_BLACK,
-                 EpaperTextAlign::CENTER, 1, true, true, 1)));
+                 EpaperTextAlign::CENTER, 1, true, false, 1)));
     
     // 1.5 静音图标 (mute_label)
     AddLabel("mute_label", new EpaperLabel(
@@ -456,7 +459,7 @@ void EpaperDisplay::SetupUI() {
     
     // ===== 2.2 时间区域（顶部左侧） =====
     AddLabel("home_slogan_1", new EpaperLabel(EpaperLabel::Text("今天吃什么?", 5, 4, 100, 16, 16, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
-    AddLabel("home_time", new EpaperLabel(EpaperLabel::Text("05:20", 5, 40, 150, 45, 45, u8g2_font_mystery_quest_56_tn, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, true, 2)));  
+    AddLabel("home_time", new EpaperLabel(EpaperLabel::Text("05:20", 5, 40, 150, 45, 45, u8g2_font_mystery_quest_56_tn, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));  
     AddLabel("home_date", new EpaperLabel(EpaperLabel::Text("SAT/NOV 22", 20, 105, 120, 18, 18, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
     
     // ===== 2.3 状态栏（顶部右侧） =====
@@ -466,15 +469,26 @@ void EpaperDisplay::SetupUI() {
     // ===== 2.4 冰箱统计区域（右侧列表） =====
     // 冰箱图标
     AddLabel("home_Fridge", new EpaperLabel(EpaperLabel::Bitmap(200, 35, EpaperImage::Fridge_24x24, 24, 24, 1, 1, false, false, false, true, 2)));
-    AddLabel("home_total_items", new EpaperLabel(EpaperLabel::Text("24 件", 230, 38, 50, 18, 18, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
+    AddLabel("home_total_items", new EpaperLabel(EpaperLabel::Text([this]() {
+        return String(FridgeManager::GetInstance().GetStatistics().total_items) + " 件";
+    }, 230, 38, 50, 18, 18, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
     
     // 分类图标
     AddLabel("home_Fridge_category", new EpaperLabel(EpaperLabel::Bitmap(200, 65, EpaperImage::Fridge_category_24x24, 24, 24, 1, 1, false, false, false, true, 2)));
-    AddLabel("home_total_category", new EpaperLabel(EpaperLabel::Text("7 类", 230, 67, 50, 18, 18, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
+    AddLabel("home_total_category", new EpaperLabel(EpaperLabel::Text([this]() {
+        auto stats = FridgeManager::GetInstance().GetStatistics();
+        int active_cats = 0;
+        for (auto const& pair : stats.category_count) {
+            if (pair.second > 0) active_cats++;
+        }
+        return String(active_cats) + " 类";
+    }, 230, 67, 50, 18, 18, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
     
     // 过期警告图标
     AddLabel("home_Fridge_warning", new EpaperLabel(EpaperLabel::Bitmap(200, 95, EpaperImage::Fridge_warning_24x24, 24, 24, 1, 1, false, false, false, true, 2)));
-    AddLabel("home_total_warning", new EpaperLabel(EpaperLabel::Text("3 过期", 230, 98, 50, 18, 18, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
+    AddLabel("home_total_warning", new EpaperLabel(EpaperLabel::Text([this]() {
+        return String(FridgeManager::GetInstance().GetStatistics().expired_items) + " 过期";
+    }, 230, 98, 50, 18, 18, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
     
 // ==========================================================page 2 end==========================================================
 // ==========================================================page 3：Food list start=============================================
@@ -489,57 +503,82 @@ void EpaperDisplay::SetupUI() {
     AddLabel("fridge_list_divider", new EpaperLabel(EpaperLabel::Line(10, 32, 286, 32, 2, GxEPD_BLACK, 1, true, 3)));
     
     // ===== 3.2 食材列表项（最多显示4行，每行高度约18像素） =====
-    // 第一行食材
-    AddLabel("item_icon_1", new EpaperLabel(
-        EpaperLabel::Bitmap(10, 35, EpaperImage::food_vegetable_24x24, 24, 24, 1, 1, false, false, false, true, 3)));
-    AddLabel("item_name_1", new EpaperLabel(
-        EpaperLabel::Text("青菜", 40, 37, 120, 18, 16, u8g2_font_wqy16_t_gb2312, 
-                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 3)));
-    AddLabel("item_qty_1", new EpaperLabel(
-        EpaperLabel::Text("500g", 160, 37, 50, 18, 16, u8g2_font_wqy16_t_gb2312, 
-                         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 3)));
-    AddLabel("item_status_1", new EpaperLabel(
-        EpaperLabel::Text("新鲜", 220, 37, 60, 18, 16, u8g2_font_wqy16_t_gb2312, 
-                         GxEPD_BLACK, EpaperTextAlign::RIGHT, 1, true, false, 3)));
-    
-    // 第二行食材
-    AddLabel("item_icon_2", new EpaperLabel(
-        EpaperLabel::Bitmap(10, 58, EpaperImage::food_egg_24x24, 24, 24, 1, 1, false, false, false, true, 3)));
-    AddLabel("item_name_2", new EpaperLabel(
-        EpaperLabel::Text("鸡蛋", 40, 60, 120, 18, 16, u8g2_font_wqy16_t_gb2312, 
-                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 3)));
-    AddLabel("item_qty_2", new EpaperLabel(
-        EpaperLabel::Text("10个", 160, 60, 50, 18, 16, u8g2_font_wqy16_t_gb2312, 
-                         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 3)));
-    AddLabel("item_status_2", new EpaperLabel(
-        EpaperLabel::Text("新鲜", 220, 60, 60, 18, 16, u8g2_font_wqy16_t_gb2312, 
-                         GxEPD_BLACK, EpaperTextAlign::RIGHT, 1, true, false, 3)));
-    
-    // 第三行食材
-    AddLabel("item_icon_3", new EpaperLabel(
-        EpaperLabel::Bitmap(10, 81, EpaperImage::food_dairy_24x24, 24, 24, 1, 1, false, false, false, true, 3)));
-    AddLabel("item_name_3", new EpaperLabel(
-        EpaperLabel::Text("牛奶", 40, 83, 120, 18, 16, u8g2_font_wqy16_t_gb2312, 
-                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 3)));
-    AddLabel("item_qty_3", new EpaperLabel(
-        EpaperLabel::Text("500ml", 160, 83, 50, 18, 16, u8g2_font_wqy16_t_gb2312, 
-                         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 3)));
-    AddLabel("item_status_3", new EpaperLabel(
-        EpaperLabel::Text("即将过期", 220, 83, 60, 14, 14, u8g2_font_wqy12_t_gb2312, 
-                         GxEPD_BLACK, EpaperTextAlign::RIGHT, 1, true, false, 3)));
-    
-    // 第四行食材
-    AddLabel("item_icon_4", new EpaperLabel(
-        EpaperLabel::Bitmap(10, 104, EpaperImage::food_cooked_24x24, 24, 24, 1, 1, false, false, false, true, 3)));
-    AddLabel("item_name_4", new EpaperLabel(
-        EpaperLabel::Text("米饭", 40, 106, 120, 18, 16, u8g2_font_wqy16_t_gb2312, 
-                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 3)));
-    AddLabel("item_qty_4", new EpaperLabel(
-        EpaperLabel::Text("2kg", 160, 106, 50, 18, 16, u8g2_font_wqy16_t_gb2312, 
-                         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 3)));
-    AddLabel("item_status_4", new EpaperLabel(
-        EpaperLabel::Text("过期", 220, 106, 60, 18, 16, u8g2_font_wqy16_t_gb2312, 
-                         GxEPD_BLACK, EpaperTextAlign::RIGHT, 1, true, false, 3)));
+    // 根据添加时间排序，显示最近存储的4个食材
+    {
+        auto all_items = FridgeManager::GetInstance().GetAllItems();
+        
+        // 按 add_time 降序排列，最近添加的在前
+        std::sort(all_items.begin(), all_items.end(), 
+                  [](const FridgeItem& a, const FridgeItem& b) {
+                      return a.add_time > b.add_time;
+                  });
+        
+        // 最多显示 4 行
+        int max_items = std::min(4, static_cast<int>(all_items.size()));
+        
+        const int16_t start_y = 37;  // 第一行的 y 坐标
+        const int16_t row_height = 23;  // 每行的高度
+        
+        // 分类->图标映射表（静态，只初始化一次）
+        static const std::map<ItemCategory, const uint8_t*> category_icons = {
+            {ItemCategory::vegetable, EpaperImage::food_vegetable_24x24},
+            {ItemCategory::fruit, EpaperImage::food_fruit_24x24},
+            {ItemCategory::meat, EpaperImage::food_meat_24x24},
+            {ItemCategory::egg, EpaperImage::food_egg_24x24},
+            {ItemCategory::dairy, EpaperImage::food_dairy_24x24},
+            {ItemCategory::cooked, EpaperImage::food_cooked_24x24},
+            {ItemCategory::seasoning, EpaperImage::food_seasoning_24x24},
+            {ItemCategory::beverage, EpaperImage::food_beverage_24x24},
+            {ItemCategory::quick, EpaperImage::food_quick_24x24},
+        };
+        
+        for (int row = 0; row < max_items; ++row) {
+            const FridgeItem& item = all_items[row];
+            int16_t y = start_y + row * row_height;
+            String row_num = String(row + 1);
+            
+            // 根据分类选择对应的图标，未找到时使用 Other
+            auto it = category_icons.find(item.category);
+            const uint8_t* icon_bitmap = (it != category_icons.end()) ? it->second : EpaperImage::food_other_24x24;
+            
+            // 添加图标
+            AddLabel("item_icon_" + row_num, new EpaperLabel(
+                EpaperLabel::Bitmap(10, y, icon_bitmap, 24, 24, 1, 1, false, false, false, true, 3)));
+            
+            // 添加食材名称（动态获取）
+            AddLabel("item_name_" + row_num, new EpaperLabel(
+                EpaperLabel::Text([item]() {
+                    return String(item.name.c_str());
+                }, 40, y + 2, 120, 18, 16, u8g2_font_wqy16_t_gb2312, 
+                GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 3)));
+            
+            // 添加数量（动态获取）
+            AddLabel("item_qty_" + row_num, new EpaperLabel(
+                EpaperLabel::Text([item]() {
+                    char buf[32];
+                    snprintf(buf, sizeof(buf), "%.1f %s", item.quantity, item.unit.c_str());
+                    return String(buf);
+                }, 160, y + 2, 50, 18, 16, u8g2_font_wqy16_t_gb2312, 
+                GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 3)));
+            
+            // 添加状态（过期/新鲜等）
+            AddLabel("item_status_" + row_num, new EpaperLabel(
+                EpaperLabel::Text([item]() {
+                    time_t now = std::time(nullptr);
+                    if (item.IsExpired(now)) {
+                        return String("过期");
+                    } else {
+                        int remaining_days = item.RemainingDays(now);
+                        if (remaining_days <= 3) {
+                            return String("即将过期");
+                        } else {
+                            return String("新鲜");
+                        }
+                    }
+                }, 220, y + 2, 60, 18, 16, u8g2_font_wqy16_t_gb2312, 
+                GxEPD_BLACK, EpaperTextAlign::RIGHT, 1, true, false, 3)));
+        }
+    }
 
 // ==========================================================page 3 end=============================================
 // ==========================================================page 4：AI Recipe start=============================================
@@ -585,8 +624,7 @@ void EpaperDisplay::SetupUI() {
 
 // ==========================================================page 4 end=====================================================    
 
-
-ui_dirty_ = true;
+    ui_dirty_ = true;
 }
 
 void EpaperDisplay::SetPowerSaveMode(bool on) {
@@ -780,6 +818,8 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
             if (label->u8g2_font != nullptr) {
                 u8g2_for_gfx.setFont(label->u8g2_font);
                 
+                String label_text = label->text();
+
                 // 如果启用了反色，先填充背景
                 if (label->invert) {
                     // 计算文本边界以确定背景填充区域
@@ -799,15 +839,15 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
                     // 单行文本，处理文本对齐
                     int16_t cursor_x = label->x;
                     if (label->align == EpaperTextAlign::CENTER) {
-                        int16_t text_w = u8g2_for_gfx.getUTF8Width(label->text.c_str());
+                        int16_t text_w = u8g2_for_gfx.getUTF8Width(label_text.c_str());
                         cursor_x = label->x - text_w / 2;
                     } else if (label->align == EpaperTextAlign::RIGHT) {
-                        int16_t text_w = u8g2_for_gfx.getUTF8Width(label->text.c_str());
+                        int16_t text_w = u8g2_for_gfx.getUTF8Width(label_text.c_str());
                         cursor_x = label->x - text_w;
                     }
                     
                     u8g2_for_gfx.setCursor(cursor_x, label->y);
-                    u8g2_for_gfx.print(label->text);
+                    u8g2_for_gfx.print(label_text);
                 }
             }
             break;
@@ -951,12 +991,15 @@ void EpaperDisplay::UpdateLabel(const String& id) {
     
     // 局部刷新：根据 label 区域设置局部窗口
     EpaperLabel* label = it->second;
+
     // 页面判断，非当前页不更新
     if (label->page != current_page_) {
         ESP_LOGD(TAG, "Skip update for label '%s' on page %d (current %d)", id.c_str(), label->page, current_page_);
         return;
     }
     
+    String label_text = label->text();
+
     // 计算刷新区域
     int16_t refresh_x = label->x;
     int16_t refresh_y = label->y;
@@ -1080,7 +1123,7 @@ void EpaperDisplay::RenderTextWithWrap(EpaperLabel* label) {
     u8g2_for_gfx.setFont(label->u8g2_font);
     u8g2_for_gfx.setForegroundColor(label->color);
     
-    String text = label->text;
+    String text = label->text();
     
     // 先检查整个文本是否超出宽度，如果没超出就不换行
     int16_t total_width = u8g2_for_gfx.getUTF8Width(text.c_str());
@@ -1190,6 +1233,7 @@ EpaperDisplay::TextBounds EpaperDisplay::CalculateTextBounds(EpaperLabel* label)
 
     u8g2_for_gfx.setFont(label->u8g2_font);
     
+    String label_text = label->text();
     int16_t ascent  = u8g2_for_gfx.getFontAscent();
     int16_t descent = u8g2_for_gfx.getFontDescent();
     // 优先使用设置的高度参数 label->h，这是用户期望的清除区域高度
@@ -1198,7 +1242,7 @@ EpaperDisplay::TextBounds EpaperDisplay::CalculateTextBounds(EpaperLabel* label)
 
     // --- ①：如果 w_max==0 → 单行文本 ---
     if (label->w_max == 0) {
-        int16_t text_w = u8g2_for_gfx.getUTF8Width(label->text.c_str());
+        int16_t text_w = u8g2_for_gfx.getUTF8Width(label_text.c_str());
         int16_t bounds_x = label->x;
 
         if (label->align == EpaperTextAlign::CENTER)
@@ -1213,7 +1257,7 @@ EpaperDisplay::TextBounds EpaperDisplay::CalculateTextBounds(EpaperLabel* label)
         return bounds;
     }
     // --- ②：有宽度限制，先测单行是否 fits ---
-    int16_t total_width = u8g2_for_gfx.getUTF8Width(label->text.c_str());
+    int16_t total_width = u8g2_for_gfx.getUTF8Width(label_text.c_str());
     if (total_width <= label->w_max) {
         int16_t bounds_x = label->x;
         if (label->align == EpaperTextAlign::CENTER)
@@ -1229,7 +1273,7 @@ EpaperDisplay::TextBounds EpaperDisplay::CalculateTextBounds(EpaperLabel* label)
     }
 
     // --- ③：多行计算（核心）---
-    String text = label->text;
+    String text = label_text;
     int text_len = text.length();
     int start_idx = 0;
 

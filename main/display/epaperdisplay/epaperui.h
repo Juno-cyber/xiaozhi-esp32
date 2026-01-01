@@ -1,6 +1,8 @@
 #pragma once
 #include <cstdint>
 #include <Arduino.h>
+#include <functional>
+#include <vector>
 #include <GxEPD2_BW.h>
 #include <U8g2_for_Adafruit_GFX.h>
 
@@ -27,6 +29,39 @@ enum class EpaperTextAlign {
 
 class EpaperLabel {
 public:
+    // 文本包装类，支持静态字符串和动态函数
+    class TextValue {
+        std::function<String()> func_;
+    public:
+        TextValue() : func_([]() { return String(""); }) {}
+        TextValue(const char* s) {
+            String str(s);
+            func_ = [str]() { return str; };
+        }
+        TextValue(const String& s) {
+            func_ = [s]() { return s; };
+        }
+        template<typename F>
+        TextValue(F f) : func_(f) {}
+        
+        TextValue& operator=(const char* s) {
+            String str(s);
+            func_ = [str]() { return str; };
+            return *this;
+        }
+        TextValue& operator=(const String& s) {
+            func_ = [s]() { return s; };
+            return *this;
+        }
+        template<typename F>
+        TextValue& operator=(F f) {
+            func_ = f;
+            return *this;
+        }
+
+        String operator()() const { return func_(); }
+    };
+
     // 类型
     EpaperObjectType type;
 
@@ -41,7 +76,7 @@ public:
     uint16_t page = 1;      // 所属页面编号
 
     // 文本属性
-    String text;
+    TextValue text;
     const uint8_t* u8g2_font = nullptr;         // U8g2 字体指针
     EpaperTextAlign align = EpaperTextAlign::LEFT;
     uint16_t w_max = 0;  // 文本最大宽度限制（用于换行）
@@ -70,7 +105,7 @@ public:
     //   max_width: 文本最大宽度限制（用于换行），0表示不限制
     //   font_height: 字体高度（用于计算实际绘制的y坐标偏移）
     //   h: 文本框高度（用于垂直对齐等）
-    static EpaperLabel Text(const String& text, int16_t x, int16_t y, uint16_t max_width, uint16_t h, uint16_t font_height,
+    static EpaperLabel Text(TextValue text, int16_t x, int16_t y, uint16_t max_width, uint16_t h, uint16_t font_height,
                             const uint8_t* u8g2_font,
                             uint16_t color = GxEPD_BLACK,
                             EpaperTextAlign align = EpaperTextAlign::LEFT,
