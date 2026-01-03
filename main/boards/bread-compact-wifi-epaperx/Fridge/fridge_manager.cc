@@ -314,7 +314,7 @@ FridgeStatistics FridgeManager::GetStatistics() const {
     stats.total_items = items_.size();
     
     // 初始化各分类计数为 0
-    for (int i = 0; i < static_cast<int>(ItemCategory::Other) + 1; ++i) {
+    for (int i = 0; i < ITEM_CATEGORY_OTHER + 1; ++i) {
         stats.category_count[static_cast<ItemCategory>(i)] = 0;
     }
     
@@ -335,7 +335,7 @@ FridgeStatistics FridgeManager::GetStatistics() const {
         }
     }
     
-    ESP_LOGD(TAG, "GetStatistics: total=%d, expired=%d, expiring_soon=%d",
+    ESP_LOGI(TAG, "GetStatistics RESULT: total=%d, expired=%d, expiring_soon=%d",
              stats.total_items, stats.expired_items, stats.expiring_soon_items);
     return stats;
 }
@@ -351,7 +351,7 @@ std::vector<FridgeAlert> FridgeManager::UpdateAlerts(time_t now) {
         AlertLevel level = item.GetAlertLevel(now);
         
         // 只添加有警告的食材
-        if (level != AlertLevel::None) {
+        if (level != ALERT_LEVEL_NONE) {
             FridgeAlert alert;
             alert.id = item.id;
             alert.level = level;

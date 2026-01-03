@@ -13,18 +13,6 @@
 #define Fridge_ID_START 1001   // 食材起始计数ID
 #define Fridge_Alert_Days 3   // 过期提前预警天数
 
-
-
-// 为 ItemCategory 枚举提供 hash 函数，以支持用作 unordered_map 的键
-namespace std {
-    template<>
-    struct hash<ItemCategory> {
-        size_t operator()(const ItemCategory& cat) const {
-            return hash<int>()(static_cast<int>(cat));
-        }
-    };
-}
-
 // 查询条件
 struct FridgeQuery {
     std::optional<ItemCategory> category;  // 可选的分类过滤
@@ -67,7 +55,7 @@ public:
     // 添加食材（参数列表），内部初始化FridgeItem对象
     ItemId AddItem(const std::string& name, ItemCategory category, 
                    float quantity, const std::string& unit, 
-                   time_t expire_time, StorageState state = StorageState::Fresh);
+                   time_t expire_time, StorageState state = STORAGE_STATE_FRESH);
     bool RemoveItem(ItemId id);
     void ClearAllItems();  // 清空所有食材
     bool UpdateItem(const FridgeItem& item);

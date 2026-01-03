@@ -401,8 +401,14 @@ void EpaperDisplay::SetupUI() {
                  EpaperTextAlign::CENTER, 1, true, false, 1)));
     // 1.4 时间标签（time_label） - 居中显示
     AddLabel("time_label",
-             new EpaperLabel(EpaperLabel::Text(
-                 "05:20", 98, 0, 100, 26, 26, u8g2_font_freedoomr25_mn, GxEPD_BLACK,
+             new EpaperLabel(EpaperLabel::Text([]() {
+                 time_t now = std::time(nullptr);
+                 struct tm tm_now;
+                 localtime_r(&now, &tm_now);
+                 char buf[16];
+                 strftime(buf, sizeof(buf), "%H:%M", &tm_now);
+                 return String(buf);
+             }, 98, 0, 100, 26, 26, u8g2_font_freedoomr25_mn, GxEPD_BLACK,
                  EpaperTextAlign::CENTER, 1, true, false, 1)));
     
     // 1.5 静音图标 (mute_label)
@@ -459,8 +465,24 @@ void EpaperDisplay::SetupUI() {
     
     // ===== 2.2 时间区域（顶部左侧） =====
     AddLabel("home_slogan_1", new EpaperLabel(EpaperLabel::Text("今天吃什么?", 5, 4, 100, 16, 16, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
-    AddLabel("home_time", new EpaperLabel(EpaperLabel::Text("05:20", 5, 40, 150, 45, 45, u8g2_font_mystery_quest_56_tn, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));  
-    AddLabel("home_date", new EpaperLabel(EpaperLabel::Text("SAT/NOV 22", 20, 105, 120, 18, 18, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
+    AddLabel("home_time", new EpaperLabel(EpaperLabel::Text([]() {
+                 time_t now = std::time(nullptr);
+                 struct tm tm_now;
+                 localtime_r(&now, &tm_now);
+                 char buf[16];
+                 strftime(buf, sizeof(buf), "%H:%M", &tm_now);
+                 return String(buf);
+             }, 5, 40, 150, 45, 45, u8g2_font_mystery_quest_56_tn, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));  
+    AddLabel("home_date", new EpaperLabel(EpaperLabel::Text([]() {
+                 time_t now = std::time(nullptr);
+                 struct tm tm_now;
+                 localtime_r(&now, &tm_now);
+                 char buf[32];
+                 strftime(buf, sizeof(buf), "%a/%b %d", &tm_now);
+                 // 转换为大写以匹配原始风格
+                 for (char *p = buf; *p; ++p) *p = toupper(*p);
+                 return String(buf);
+             }, 20, 105, 120, 18, 18, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
     
     // ===== 2.3 状态栏（顶部右侧） =====
     AddLabel("home_battery", new EpaperLabel(EpaperLabel::Bitmap(270, 0, EpaperImage::battery_full_24x24, 24, 24, 1, 1, false, false, false, true, 2)));
@@ -470,8 +492,8 @@ void EpaperDisplay::SetupUI() {
     // 冰箱图标
     AddLabel("home_Fridge", new EpaperLabel(EpaperLabel::Bitmap(200, 35, EpaperImage::Fridge_24x24, 24, 24, 1, 1, false, false, false, true, 2)));
     AddLabel("home_total_items", new EpaperLabel(EpaperLabel::Text([this]() {
-        return String(FridgeManager::GetInstance().GetStatistics().total_items) + " 件";
-    }, 230, 38, 50, 18, 18, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
+        return String(FridgeManager::GetInstance().GetStatistics().total_items) + "件";
+    }, 230, 38, 70, 18, 18, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
     
     // 分类图标
     AddLabel("home_Fridge_category", new EpaperLabel(EpaperLabel::Bitmap(200, 65, EpaperImage::Fridge_category_24x24, 24, 24, 1, 1, false, false, false, true, 2)));
@@ -481,14 +503,14 @@ void EpaperDisplay::SetupUI() {
         for (auto const& pair : stats.category_count) {
             if (pair.second > 0) active_cats++;
         }
-        return String(active_cats) + " 类";
-    }, 230, 67, 50, 18, 18, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
+        return String(active_cats) + "类";
+    }, 230, 67, 70, 18, 18, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
     
     // 过期警告图标
     AddLabel("home_Fridge_warning", new EpaperLabel(EpaperLabel::Bitmap(200, 95, EpaperImage::Fridge_warning_24x24, 24, 24, 1, 1, false, false, false, true, 2)));
     AddLabel("home_total_warning", new EpaperLabel(EpaperLabel::Text([this]() {
-        return String(FridgeManager::GetInstance().GetStatistics().expired_items) + " 过期";
-    }, 230, 98, 50, 18, 18, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
+        return String(FridgeManager::GetInstance().GetStatistics().expired_items) + "过期";
+    }, 230, 98, 70, 18, 18, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
     
 // ==========================================================page 2 end==========================================================
 // ==========================================================page 3：Food list start=============================================
@@ -519,27 +541,13 @@ void EpaperDisplay::SetupUI() {
         const int16_t start_y = 37;  // 第一行的 y 坐标
         const int16_t row_height = 23;  // 每行的高度
         
-        // 分类->图标映射表（静态，只初始化一次）
-        static const std::map<ItemCategory, const uint8_t*> category_icons = {
-            {ItemCategory::vegetable, EpaperImage::food_vegetable_24x24},
-            {ItemCategory::fruit, EpaperImage::food_fruit_24x24},
-            {ItemCategory::meat, EpaperImage::food_meat_24x24},
-            {ItemCategory::egg, EpaperImage::food_egg_24x24},
-            {ItemCategory::dairy, EpaperImage::food_dairy_24x24},
-            {ItemCategory::cooked, EpaperImage::food_cooked_24x24},
-            {ItemCategory::seasoning, EpaperImage::food_seasoning_24x24},
-            {ItemCategory::beverage, EpaperImage::food_beverage_24x24},
-            {ItemCategory::quick, EpaperImage::food_quick_24x24},
-        };
-        
         for (int row = 0; row < max_items; ++row) {
             const FridgeItem& item = all_items[row];
             int16_t y = start_y + row * row_height;
             String row_num = String(row + 1);
             
             // 根据分类选择对应的图标，未找到时使用 Other
-            auto it = category_icons.find(item.category);
-            const uint8_t* icon_bitmap = (it != category_icons.end()) ? it->second : EpaperImage::food_other_24x24;
+            const uint8_t* icon_bitmap = EpaperImage::GetCategoryIcon(item.category);
             
             // 添加图标
             AddLabel("item_icon_" + row_num, new EpaperLabel(
@@ -558,7 +566,7 @@ void EpaperDisplay::SetupUI() {
                     char buf[32];
                     snprintf(buf, sizeof(buf), "%.1f %s", item.quantity, item.unit.c_str());
                     return String(buf);
-                }, 160, y + 2, 50, 18, 16, u8g2_font_wqy16_t_gb2312, 
+                }, 160, y + 2, 70, 18, 16, u8g2_font_wqy16_t_gb2312, 
                 GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 3)));
             
             // 添加状态（过期/新鲜等）
@@ -570,12 +578,12 @@ void EpaperDisplay::SetupUI() {
                     } else {
                         int remaining_days = item.RemainingDays(now);
                         if (remaining_days <= 3) {
-                            return String("即将过期");
+                            return String("快过期");
                         } else {
                             return String("新鲜");
                         }
                     }
-                }, 220, y + 2, 60, 18, 16, u8g2_font_wqy16_t_gb2312, 
+                }, 220, y + 2, 70, 18, 16, u8g2_font_wqy16_t_gb2312, 
                 GxEPD_BLACK, EpaperTextAlign::RIGHT, 1, true, false, 3)));
         }
     }

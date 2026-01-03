@@ -4,41 +4,9 @@
 #include <string>
 #include <vector>
 #include <ctime>
+#include "fridge_enum_utils.h"
 
 using ItemId = uint32_t;
-
-// 存储状态
-enum class StorageState {
-    Fresh,      // 新鲜冷藏
-    Frozen,     // 冷冻
-};
-
-// 包装状态
-enum class PackageState {
-    Sealed,      // 未开封
-    Opened       // 已开封
-};
-
-// 食材分类
-enum class ItemCategory {  
-    vegetable,      // 蔬菜
-    fruit,          // 水果
-    meat,           // 肉类
-    egg,            // 蛋类
-    dairy,          // 乳制品
-    cooked,         // 熟食
-    seasoning,      // 调味料
-    beverage,       // 饮料
-    quick,          // 速食食品
-    Other           // 其他
-};
-
-// 报警枚举
-enum class AlertLevel {
-    None,
-    Warning,    // 即将过期
-    Critical    // 已过期
-};
 
 // 食材消耗记录
 struct ConsumeRecord {
@@ -66,8 +34,8 @@ public:
     std::vector<ConsumeRecord> consume_history;
 
 public:
-    FridgeItem() : id(0), name(""), category(ItemCategory::Other), quantity(0.0f), unit(""),
-                   state(StorageState::Fresh), package_state(PackageState::Sealed), 
+    FridgeItem() : id(0), name(""), category(ITEM_CATEGORY_OTHER), quantity(0.0f), unit(""),
+                   state(STORAGE_STATE_FRESH), package_state(PACKAGE_STATE_SEALED), 
                    add_time(0), expire_time(0), last_update_time(0), open_time(0) {}
     
     // 添加消耗记录，自动维护长度限制
@@ -81,14 +49,20 @@ public:
     bool IsExpired(time_t now) const;
     int RemainingDays(time_t now) const;
     AlertLevel GetAlertLevel(time_t now) const;
+    // 用于数据持久化的JSON转换（包含所有内部字段）
     std::string ToJson() const;
     static FridgeItem FromJson(const std::string& json);
+    
+    // 用于MCP通信的JSON转换（格式化可读的字段，包含计算字段如remaining_days等）
+    std::string ToMcpJson() const;
+    // 从MCP通信格式的JSON创建对象（与ToMcpJson()对应，用于LLM下发的食材数据）
+    static FridgeItem FromMcpJson(const std::string& json);
 };
 
 inline FridgeItem CreateFridgeItem(ItemId id, const std::string& name, 
                                    ItemCategory category, float quantity,
                                    const std::string& unit, time_t expire_time,
-                                   StorageState state = StorageState::Fresh) {
+                                   StorageState state = STORAGE_STATE_FRESH) {
     FridgeItem item;
     item.id = id;
     item.name = name;
@@ -99,7 +73,7 @@ inline FridgeItem CreateFridgeItem(ItemId id, const std::string& name,
     item.expire_time = expire_time;
     item.add_time = std::time(nullptr);
     item.last_update_time = std::time(nullptr);
-    item.package_state = PackageState::Sealed;
+    item.package_state = PACKAGE_STATE_SEALED;
     item.open_time = 0;
     return item;
 }

@@ -1,6 +1,8 @@
 #ifndef _EpaperImage_H_
 #define _EpaperImage_H_
 
+#include <cstdint>
+#include <map>
 #if defined(ESP8266) || defined(ESP32)
 #include <pgmspace.h>
 #else
@@ -90,6 +92,29 @@ extern const unsigned char food_quick_24x24[72] PROGMEM;         // 9.速食食�
 extern const unsigned char food_other_24x24[72] PROGMEM;          // 10.其他
 // ============ 食材icon (72x72) ============
 extern const unsigned char food_cooker_72x72[648] PROGMEM;          // cooker
+
+// ============ 食材分类->图标映射表 ============
+// 注意：需要包含 fridge_enum_utils.h 才能使用此映射表
+// 使用方式：在需要的地方 #include "fridge_enum_utils.h"
+//           然后直接调用 GetCategoryIcon(item.category)
+inline const uint8_t* GetCategoryIcon(int category) {
+    // 分类->图标映射表（静态，只初始化一次）
+    static const std::map<int, const uint8_t*> category_icons = {
+        {0, food_vegetable_24x24},   // ITEM_CATEGORY_VEGETABLE
+        {1, food_fruit_24x24},       // ITEM_CATEGORY_FRUIT
+        {2, food_meat_24x24},        // ITEM_CATEGORY_MEAT
+        {3, food_egg_24x24},         // ITEM_CATEGORY_EGG
+        {4, food_dairy_24x24},       // ITEM_CATEGORY_DAIRY
+        {5, food_cooked_24x24},      // ITEM_CATEGORY_COOKED
+        {6, food_seasoning_24x24},   // ITEM_CATEGORY_SEASONING
+        {7, food_beverage_24x24},    // ITEM_CATEGORY_BEVERAGE
+        {8, food_quick_24x24},       // ITEM_CATEGORY_QUICK
+    };
+    
+    auto it = category_icons.find(category);
+    return (it != category_icons.end()) ? it->second : food_other_24x24;
+}
+
 }  // namespace EpaperImage
 
 
