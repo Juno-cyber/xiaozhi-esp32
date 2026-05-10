@@ -217,6 +217,9 @@ FridgeItem FridgeItem::FromMcpJson(const std::string& json_str) {
     cJSON* category_obj = cJSON_GetObjectItem(j, "category");
     if (category_obj && cJSON_IsString(category_obj)) {
         item.category = StringToItemCategory(category_obj->valuestring);
+        if (item.category == -1) {
+            item.category = ITEM_CATEGORY_OTHER;
+        }
     }
     
     // quantity 字段

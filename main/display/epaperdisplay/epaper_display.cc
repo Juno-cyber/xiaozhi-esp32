@@ -74,7 +74,12 @@ EpaperDisplay::EpaperDisplay(gpio_num_t cs, gpio_num_t dc, gpio_num_t rst, gpio_
     u8g2_for_gfx.begin(display_epaper);
     
     // 初始化 UI（不立即刷新，避免重复刷新卡顿）
-    SetupUI();   
+    SetupUI();
+
+    // 监听冰箱数据变化，自动刷新相关标签
+    FridgeManager::GetInstance().SetOnDataChanged([this]() {
+        this->RefreshFridgeLabels();
+    });
 }
 
 EpaperDisplay::~EpaperDisplay() {
@@ -356,7 +361,20 @@ void EpaperDisplay::UpdateStatusBar(bool update_all) {
                 if (auto* home_time = GetLabel("home_time")) {
                     home_time->text = String(time_str);
                     LabelShow("home_time");
-                }                
+                }
+
+                // 检查日期是否变更，若变更则刷新冰箱标签（处理过期状态变化）
+                static int last_mday = -1;
+                if (tm->tm_mday != last_mday) {
+                    if (last_mday != -1) { // 避免启动时重复刷新，SetupUI 已经调用过一次
+                        RefreshFridgeLabelsInternal();
+                        // 如果当前页是冰箱页，需要刷新界面反映最新的过期状态
+                        if (current_page_ == FRIDGE_STATS_PAGE || current_page_ == FOOD_LIST_PAGE) {
+                            UpdateUI(false);
+                        }
+                    }
+                    last_mday = tm->tm_mday;
+                }
                 
                 last_status_update_time_ = std::chrono::system_clock::now();
             } else {
@@ -525,68 +543,7 @@ void EpaperDisplay::SetupUI() {
     AddLabel("fridge_list_divider", new EpaperLabel(EpaperLabel::Line(10, 32, 286, 32, 2, GxEPD_BLACK, 1, true, 3)));
     
     // ===== 3.2 食材列表项（最多显示4行，每行高度约18像素） =====
-    // 根据添加时间排序，显示最近存储的4个食材
-    {
-        auto all_items = FridgeManager::GetInstance().GetAllItems();
-        
-        // 按 add_time 降序排列，最近添加的在前
-        std::sort(all_items.begin(), all_items.end(), 
-                  [](const FridgeItem& a, const FridgeItem& b) {
-                      return a.add_time > b.add_time;
-                  });
-        
-        // 最多显示 4 行
-        int max_items = std::min(4, static_cast<int>(all_items.size()));
-        
-        const int16_t start_y = 37;  // 第一行的 y 坐标
-        const int16_t row_height = 23;  // 每行的高度
-        
-        for (int row = 0; row < max_items; ++row) {
-            const FridgeItem& item = all_items[row];
-            int16_t y = start_y + row * row_height;
-            String row_num = String(row + 1);
-            
-            // 根据分类选择对应的图标，未找到时使用 Other
-            const uint8_t* icon_bitmap = EpaperImage::GetCategoryIcon(item.category);
-            
-            // 添加图标
-            AddLabel("item_icon_" + row_num, new EpaperLabel(
-                EpaperLabel::Bitmap(10, y, icon_bitmap, 24, 24, 1, 1, false, false, false, true, 3)));
-            
-            // 添加食材名称（动态获取）
-            AddLabel("item_name_" + row_num, new EpaperLabel(
-                EpaperLabel::Text([item]() {
-                    return String(item.name.c_str());
-                }, 40, y + 2, 120, 18, 16, u8g2_font_wqy16_t_gb2312, 
-                GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 3)));
-            
-            // 添加数量（动态获取）
-            AddLabel("item_qty_" + row_num, new EpaperLabel(
-                EpaperLabel::Text([item]() {
-                    char buf[32];
-                    snprintf(buf, sizeof(buf), "%.1f %s", item.quantity, item.unit.c_str());
-                    return String(buf);
-                }, 160, y + 2, 70, 18, 16, u8g2_font_wqy16_t_gb2312, 
-                GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 3)));
-            
-            // 添加状态（过期/新鲜等）
-            AddLabel("item_status_" + row_num, new EpaperLabel(
-                EpaperLabel::Text([item]() {
-                    time_t now = std::time(nullptr);
-                    if (item.IsExpired(now)) {
-                        return String("过期");
-                    } else {
-                        int remaining_days = item.RemainingDays(now);
-                        if (remaining_days <= 3) {
-                            return String("快过期");
-                        } else {
-                            return String("新鲜");
-                        }
-                    }
-                }, 220, y + 2, 70, 18, 16, u8g2_font_wqy16_t_gb2312, 
-                GxEPD_BLACK, EpaperTextAlign::RIGHT, 1, true, false, 3)));
-        }
-    }
+    RefreshFridgeLabelsInternal();
 
 // ==========================================================page 3 end=============================================
 // ==========================================================page 4：AI Recipe start=============================================
@@ -1067,6 +1024,87 @@ void EpaperDisplay::UpdateLabel(const String& id) {
         // display_epaper.fillScreen(GxEPD_WHITE);  // 清空局部区域
         RenderLabel(label);
     } while (display_epaper.nextPage());
+}
+
+void EpaperDisplay::RefreshFridgeLabels() {
+    DisplayLockGuard lock(this);
+    RefreshFridgeLabelsInternal();
+    
+    // 如果当前正在显示冰箱相关的页面（Page 2 或 3），统一触发一次局部刷新
+    if (current_page_ == FRIDGE_STATS_PAGE || current_page_ == FOOD_LIST_PAGE) {
+        UpdateUI(false);
+    }
+}
+
+void EpaperDisplay::RefreshFridgeLabelsInternal() {
+    ESP_LOGI(TAG, "Refreshing fridge labels data...");
+
+    // 1. 更新统计数据（仅更新 Label 的 text 函数闭包，不触发刷新）
+    // 这里的统计数据是通过 SetupUI 中注册的 lambda 实时获取的，
+    // 我们只需要标记 ui_dirty_ 或者确保 Label 存在即可。
+    
+    // 2. 重构第 3 页的食材列表
+    // 首先移除旧的列表标签
+    for (int i = 1; i <= 4; ++i) {
+        String row_num = String(i);
+        RemoveLabel("item_icon_" + row_num);
+        RemoveLabel("item_name_" + row_num);
+        RemoveLabel("item_qty_" + row_num);
+        RemoveLabel("item_status_" + row_num);
+    }
+
+    // 获取并排序食材
+    auto all_items = FridgeManager::GetInstance().GetAllItems();
+    std::sort(all_items.begin(), all_items.end(), 
+              [](const FridgeItem& a, const FridgeItem& b) {
+                  return a.add_time > b.add_time;
+              });
+
+    int max_items = std::min(4, static_cast<int>(all_items.size()));
+    const int16_t start_y = 37;
+    const int16_t row_height = 23;
+
+    for (int row = 0; row < max_items; ++row) {
+        const FridgeItem& item = all_items[row];
+        int16_t y = start_y + row * row_height;
+        String row_num = String(row + 1);
+        
+        const uint8_t* icon_bitmap = EpaperImage::GetCategoryIcon(item.category);
+        
+        // 使用 AddLabel 重新添加标签，这些标签会自动应用到 UI
+        AddLabel("item_icon_" + row_num, new EpaperLabel(
+            EpaperLabel::Bitmap(10, y, icon_bitmap, 24, 24, 1, 1, false, false, false, true, 3)));
+        
+        AddLabel("item_name_" + row_num, new EpaperLabel(
+            EpaperLabel::Text([item]() {
+                return String(item.name.c_str());
+            }, 40, y + 2, 120, 18, 16, u8g2_font_wqy16_t_gb2312, 
+            GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 3)));
+        
+        AddLabel("item_qty_" + row_num, new EpaperLabel(
+            EpaperLabel::Text([item]() {
+                char buf[32];
+                snprintf(buf, sizeof(buf), "%.1f %s", item.quantity, item.unit.c_str());
+                return String(buf);
+            }, 160, y + 2, 70, 18, 16, u8g2_font_wqy16_t_gb2312, 
+            GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 3)));
+        
+        AddLabel("item_status_" + row_num, new EpaperLabel(
+            EpaperLabel::Text([item]() {
+                time_t now = std::time(nullptr);
+                if (item.IsExpired(now)) {
+                    return String("过期");
+                } else {
+                    int remaining_days = item.RemainingDays(now);
+                    if (remaining_days <= 3) {
+                        return String("快过期");
+                    } else {
+                        return String("新鲜");
+                    }
+                }
+            }, 220, y + 2, 70, 18, 16, u8g2_font_wqy16_t_gb2312, 
+            GxEPD_BLACK, EpaperTextAlign::RIGHT, 1, true, false, 3)));
+    }
 }
 
 void EpaperDisplay::UpdateUI(bool fullRefresh) {

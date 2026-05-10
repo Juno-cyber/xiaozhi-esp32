@@ -70,7 +70,7 @@ inline const char* ItemCategoryToString(ItemCategory category) {
         "seasoning",    // 调味料
         "beverage",     // 饮料
         "quick",        // 速食食品
-        "Other"         // 其他
+        "other"         // 其他
     };
     if (category < 0 || category >= 10) return "Unknown";
     return names[category];
@@ -125,8 +125,8 @@ inline ItemCategory StringToItemCategory(const std::string& str) {
     if (str == "seasoning") return ITEM_CATEGORY_SEASONING;
     if (str == "beverage") return ITEM_CATEGORY_BEVERAGE;
     if (str == "quick") return ITEM_CATEGORY_QUICK;
-    if (str == "Other") return ITEM_CATEGORY_OTHER;
-    return ITEM_CATEGORY_OTHER;  // 默认值
+    if (str == "other" || str == "Other") return ITEM_CATEGORY_OTHER;
+    return -1;  // 返回 -1 表示未找到或无效分类
 }
 
 // 将日期时间字符串解析为时间戳

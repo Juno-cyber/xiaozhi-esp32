@@ -8,6 +8,7 @@
 #include <map>
 #include <ctime>
 #include <optional>
+#include <functional>
 
 #define Fridge_MAX_ITEMS 200  // 最大食材数量
 #define Fridge_ID_START 1001   // 食材起始计数ID
@@ -19,6 +20,11 @@ struct FridgeQuery {
     bool only_expired = false;
     bool expiring_soon = false;
     int expiring_days = 7;  // 默认7天内过期
+    
+    // 排序与限制
+    int limit = 0;          // 0 表示不限制
+    std::string sort_by;    // "add_time", "expire_time", "name"
+    std::string order;      // "asc", "desc"
 };
 
 // 统计结果
@@ -73,6 +79,11 @@ public:
     // ========== 报警 ==========
     std::vector<FridgeAlert> UpdateAlerts(time_t now);
     
+    // ========== 回调通知 ==========
+    using DataChangedCallback = std::function<void()>;
+    void SetOnDataChanged(DataChangedCallback callback);
+    void NotifyDataChanged();
+    
     // ========== LLM 接口 ==========
     std::string BuildLLMPrompt() const;
     
@@ -89,10 +100,13 @@ private:
     // NVS 命名空间
     static constexpr const char* NVS_NAMESPACE = "fridge";
     
+    DataChangedCallback on_data_changed_ = nullptr;
+    
     // 内部方法
     void LoadFromNVS();
     void SaveItem(const FridgeItem& item);
     void DeleteItemFromNVS(ItemId id);
+    bool RemoveItemInternal(ItemId id, bool notify);
     ItemId GetNextItemId();
 };
 

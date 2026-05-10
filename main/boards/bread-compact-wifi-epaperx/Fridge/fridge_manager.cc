@@ -124,11 +124,16 @@ ItemId FridgeManager::AddItem(const std::string& name, ItemCategory category,
     ESP_LOGI(TAG, "Added item ID=%lu, name=%s, category=%d",
              new_id, new_item.name.c_str(), static_cast<int>(new_item.category));
     
+    NotifyDataChanged();
     return new_id;
 }
 
 // 删除食材
 bool FridgeManager::RemoveItem(ItemId id) {
+    return RemoveItemInternal(id, true);
+}
+
+bool FridgeManager::RemoveItemInternal(ItemId id, bool notify) {
     auto it = items_.find(id);
     if (it == items_.end()) {
         ESP_LOGW(TAG, "Item ID=%lu not found", id);
@@ -159,19 +164,23 @@ bool FridgeManager::RemoveItem(ItemId id) {
     DeleteItemFromNVS(id);
     
     ESP_LOGI(TAG, "Removed item ID=%lu", id);
+    if (notify) {
+        NotifyDataChanged();
+    }
     return true;
 }
 
 // 清空所有食材
 void FridgeManager::ClearAllItems() {
-    // 跨床清空itemems_、category_index_、id_list_三个数据结构
-    std::vector<ItemId> ids_to_delete = id_list_;  // 拷贝一份ID列表，以便安全地遍历
+    // 拷贝一份ID列表，以便安全地遍历
+    std::vector<ItemId> ids_to_delete = id_list_;
     
     for (ItemId id : ids_to_delete) {
-        RemoveItem(id);
+        RemoveItemInternal(id, false);
     }
     
-    ESP_LOGI(TAG, "Cleared all items (%zu items deleted)", ids_to_delete.size());
+    ESP_LOGI(TAG, "Cleared all items (%u items deleted)", (unsigned int)ids_to_delete.size());
+    NotifyDataChanged();
 }
 
 // 更新食材
@@ -204,6 +213,7 @@ bool FridgeManager::UpdateItem(const FridgeItem& item) {
     SaveItem(item);
     
     ESP_LOGI(TAG, "Updated item ID=%lu, name=%s", item.id, item.name.c_str());
+    NotifyDataChanged();
     return true;
 }
 
@@ -237,6 +247,7 @@ bool FridgeManager::ConsumeItem(ItemId id, float amount) {
     
     ESP_LOGI(TAG, "Consumed %.2f from item ID=%lu, remaining=%.2f",
              amount, id, it->second.quantity);
+    NotifyDataChanged();
     return true;
 }
 
@@ -263,7 +274,12 @@ std::vector<FridgeItem> FridgeManager::GetAllItems() const {
     return result;
 }
 
-// 按条件查询食材
+/**
+ * @brief 按条件查询食材信息
+ * 
+ * @param query 查询条件结构体，支持分类、已过期、即将过期等多种过滤方式
+ * @return std::vector<FridgeItem> 返回符合过滤条件的所有食材对象列表
+ */
 std::vector<FridgeItem> FridgeManager::Query(const FridgeQuery& query) const {
     std::vector<FridgeItem> result;
     time_t now = std::time(nullptr);
@@ -283,16 +299,40 @@ std::vector<FridgeItem> FridgeManager::Query(const FridgeQuery& query) const {
         
         // 检查即将过期过滤
         if (query.expiring_soon) {
+            // 只包含未过期且在预警天数内的物品
+            if (item.IsExpired(now)) {
+                continue;
+            }
             int remaining = item.RemainingDays(now);
             if (remaining < 0 || remaining > query.expiring_days) {
-                continue;  // 已过期或距离过期还很远
+                continue;
             }
         }
         
         result.push_back(item);
     }
     
-    ESP_LOGD(TAG, "Query: returned %zu items", result.size());
+    // 执行排序
+    if (!query.sort_by.empty()) {
+        bool asc = (query.order == "asc");
+        std::sort(result.begin(), result.end(), [&](const FridgeItem& a, const FridgeItem& b) {
+            if (query.sort_by == "add_time") {
+                return asc ? (a.add_time < b.add_time) : (a.add_time > b.add_time);
+            } else if (query.sort_by == "expire_time") {
+                return asc ? (a.expire_time < b.expire_time) : (a.expire_time > b.expire_time);
+            } else if (query.sort_by == "name") {
+                return asc ? (a.name < b.name) : (a.name > b.name);
+            }
+            return false;
+        });
+    }
+    
+    // 执行数量限制
+    if (query.limit > 0 && query.limit < (int)result.size()) {
+        result.erase(result.begin() + query.limit, result.end());
+    }
+    
+    ESP_LOGD(TAG, "Query: returned %u items", (unsigned int)result.size());
     return result;
 }
 
@@ -335,7 +375,7 @@ FridgeStatistics FridgeManager::GetStatistics() const {
         }
     }
     
-    ESP_LOGI(TAG, "GetStatistics RESULT: total=%d, expired=%d, expiring_soon=%d",
+    ESP_LOGD(TAG, "GetStatistics RESULT: total=%d, expired=%d, expiring_soon=%d",
              stats.total_items, stats.expired_items, stats.expiring_soon_items);
     return stats;
 }
@@ -360,6 +400,18 @@ std::vector<FridgeAlert> FridgeManager::UpdateAlerts(time_t now) {
         }
     }
     
-    ESP_LOGD(TAG, "UpdateAlerts: found %zu alerts", alerts.size());
+    ESP_LOGD(TAG, "UpdateAlerts: found %u alerts", (unsigned int)alerts.size());
     return alerts;
+}
+
+// ========== 回调通知 ==========
+
+void FridgeManager::SetOnDataChanged(DataChangedCallback callback) {
+    on_data_changed_ = callback;
+}
+
+void FridgeManager::NotifyDataChanged() {
+    if (on_data_changed_) {
+        on_data_changed_();
+    }
 }

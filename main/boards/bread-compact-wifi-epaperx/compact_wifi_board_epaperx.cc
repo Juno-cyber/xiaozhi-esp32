@@ -8,6 +8,8 @@
 #include "mcp_server.h"
 #include "lamp_controller.h"
 #include "led/single_led.h"
+#include "Fridge/fridge_mcp.h"
+#include "Fridge/fridge_manager.h"
 
 #include <wifi_station.h>
 #include <esp_log.h>
@@ -177,6 +179,14 @@ private:
     // 物联网初始化，添加对 AI 可见设备
     void InitializeTools() {
         static LampController lamp(LAMP_GPIO);
+        
+        // 初始化冰箱管理器（加载NVS数据）
+        FridgeManager::GetInstance();
+        
+        // 注册冰箱管理 MCP 工具
+        auto& mcp_server = McpServer::GetInstance();
+        static FridgeMcpTools fridge_mcp;
+        fridge_mcp.Initialize();
     }
 
 public:

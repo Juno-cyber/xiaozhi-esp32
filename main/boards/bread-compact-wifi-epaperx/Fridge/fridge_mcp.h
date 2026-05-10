@@ -16,6 +16,13 @@ private:
     // MCP 工具回调函数
     ReturnValue HandleGetItem(const PropertyList& properties);
     ReturnValue HandleAddItem(const PropertyList& properties);
+    ReturnValue HandleRemoveItem(const PropertyList& properties);
+    ReturnValue HandleClearAll(const PropertyList& properties);
+    ReturnValue HandleStatsSummary(const PropertyList& properties);
+    ReturnValue HandleStatsQuery(const PropertyList& properties);
+    ReturnValue HandleItemList(const PropertyList& properties);
+    ReturnValue HandleItemUpdate(const PropertyList& properties);
+    ReturnValue HandlePageManager(const PropertyList& properties);
 };
 
 #endif // FRIDGE_MCP_H

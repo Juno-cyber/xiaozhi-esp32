@@ -53,6 +53,13 @@
 
 //##################   Epaperdisplay类的实现 end
 
+enum EpaperPage {
+    HOME_PAGE = 1,
+    FRIDGE_STATS_PAGE = 2,
+    FOOD_LIST_PAGE = 3,
+    RECIPE_PAGE = 4
+};
+
 class EpaperDisplay : public Display {
 public:
     EpaperDisplay(gpio_num_t cs, gpio_num_t dc, gpio_num_t rst, gpio_num_t busy);
@@ -79,6 +86,8 @@ public:
     // 显示/隐藏控制方法
     void LabelShow(const String& id);                      // 显示指定 label
     void LabelHide(const String& id);                      // 隐藏指定 label
+    void RefreshFridgeLabels();                            // 刷新冰箱相关标签
+    void RefreshFridgeLabelsInternal();                    // 刷新冰箱相关标签 (内部使用，不加锁)
 
 protected:
     esp_pm_lock_handle_t pm_lock_ = nullptr;
@@ -94,7 +103,7 @@ protected:
     // UI 管理
     std::map<String, EpaperLabel*> ui_labels_;  // 存储所有 UI 元素
     bool ui_dirty_ = false;                      // 标记是否需要刷新
-    uint16_t current_page_ = 2;                  // 当前页面
+    uint16_t current_page_ = FRIDGE_STATS_PAGE;  // 当前页面
 
     // 内部渲染方法
     void RenderLabel(EpaperLabel *label); // 渲染单个 label
