@@ -54,10 +54,11 @@
 //##################   Epaperdisplay类的实现 end
 
 enum EpaperPage {
-    HOME_PAGE = 1,
+    CHAT_PAGE = 1,
     FRIDGE_STATS_PAGE = 2,
     FOOD_LIST_PAGE = 3,
-    RECIPE_PAGE = 4
+    RECIPE_PAGE = 4,
+    HOME_PIC_DISPLAY = 5
 };
 
 class EpaperDisplay : public Display {
@@ -88,6 +89,8 @@ public:
     void LabelHide(const String& id);                      // 隐藏指定 label
     void RefreshFridgeLabels();                            // 刷新冰箱相关标签
     void RefreshFridgeLabelsInternal();                    // 刷新冰箱相关标签 (内部使用，不加锁)
+    void SetRecipeContent(const char* content);            // 更新 AI 食谱文本
+    void SetMemorialDate(int year, int month, int day);   // 设置纪念日日期
 
 protected:
     esp_pm_lock_handle_t pm_lock_ = nullptr;
@@ -103,7 +106,14 @@ protected:
     // UI 管理
     std::map<String, EpaperLabel*> ui_labels_;  // 存储所有 UI 元素
     bool ui_dirty_ = false;                      // 标记是否需要刷新
-    uint16_t current_page_ = FRIDGE_STATS_PAGE;  // 当前页面
+    uint16_t current_page_ = HOME_PIC_DISPLAY;  // 当前页面
+    uint8_t display_rotation_ = 3;              // 显示旋转: 1=正常, 3=180°旋转
+
+    // 纪念日相关
+    bool memorial_date_set_ = false;
+    int memorial_year_ = 0;
+    int memorial_month_ = 0;
+    int memorial_day_ = 0;
 
     // 内部渲染方法
     void RenderLabel(EpaperLabel *label); // 渲染单个 label

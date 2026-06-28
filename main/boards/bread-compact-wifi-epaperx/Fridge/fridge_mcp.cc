@@ -2,8 +2,67 @@
 #include "board.h"
 #include "display/epaperdisplay/epaper_display.h"
 #include <esp_log.h>
+#include <sstream>
 
 static const char* TAG = "FridgeMCP";
+
+namespace {
+
+std::string EscapeJsonString(const std::string& input) {
+    std::string output;
+    output.reserve(input.size() + 16);
+    for (char ch : input) {
+        switch (ch) {
+            case '\\': output += "\\\\"; break;
+            case '"': output += "\\\""; break;
+            case '\n': output += "\\n"; break;
+            case '\r': break;
+            case '\t': output += "\\t"; break;
+            default: output += ch; break;
+        }
+    }
+    return output;
+}
+
+std::string BuildRecipeDisplayText(const std::string& mode,
+                                   const std::string& dish_name,
+                                   const std::string& summary,
+                                   const std::string& required_ingredients,
+                                   const std::string& extra_ingredients,
+                                   const std::string& cooking_time) {
+    (void)mode;
+    std::string display_text = dish_name;
+    if (!cooking_time.empty()) {
+        display_text += "（" + cooking_time + "）";
+    }
+
+    if (!summary.empty()) {
+        display_text += "\n推荐: " + summary;
+    }
+
+    if (!required_ingredients.empty()) {
+        display_text += "\n需要: " + required_ingredients;
+    }
+
+    display_text += "\n采购: ";
+    display_text += extra_ingredients.empty() ? "无" : extra_ingredients;
+
+    return display_text;
+}
+
+std::string BuildInventorySnapshotJson(const std::vector<FridgeItem>& items) {
+    std::string json = "[";
+    for (size_t i = 0; i < items.size(); ++i) {
+        if (i > 0) {
+            json += ",";
+        }
+        json += items[i].ToMcpJson();
+    }
+    json += "]";
+    return json;
+}
+
+}  // namespace
 
 void FridgeMcpTools::Initialize() {
     auto& mcp_server = McpServer::GetInstance();
@@ -136,18 +195,42 @@ void FridgeMcpTools::Initialize() {
     
     // 工具 9: 冰箱显示页面管理
     PropertyList page_props;
-    page_props.AddProperty(Property("target_page", kPropertyTypeInteger, 1, 4));
+    page_props.AddProperty(Property("target_page", kPropertyTypeInteger, 1, 5));
 
     mcp_server.AddTool("fridge.pagemanager",
         "Switch the e-paper display page to show different fridge information. "
-        "1: HOME_PAGE (Clock/Summary), 2: FRIDGE_STATS_PAGE (Statistics), 3: FOOD_LIST_PAGE (Item list), 4: RECIPE_PAGE (AI Recipes). "
+        "1: CHAT_PAGE (Clock/Summary), 2: FRIDGE_STATS_PAGE (Statistics), 3: FOOD_LIST_PAGE (Item list), 4: RECIPE_PAGE (AI Recipes), 5: HOME_PIC_DISPLAY (Home Picture). "
         "当需要查看冰箱统计、食材列表或AI菜谱时切换页面。",
         page_props,
         [this](const PropertyList& properties) -> ReturnValue {
             return HandlePageManager(properties);
         });
+
+    // 工具 10: AI 食谱推荐显示
+    PropertyList recipe_props;
+    recipe_props.AddProperty(Property("recommendation_mode", kPropertyTypeString));
+    recipe_props.AddProperty(Property("dish_name", kPropertyTypeString));
+    recipe_props.AddProperty(Property("summary", kPropertyTypeString, std::string("")));
+    recipe_props.AddProperty(Property("required_ingredients", kPropertyTypeString));
+    recipe_props.AddProperty(Property("extra_ingredients", kPropertyTypeString, std::string("")));
+    recipe_props.AddProperty(Property("cooking_time", kPropertyTypeString, std::string("20分钟")));
+    recipe_props.AddProperty(Property("switch_page", kPropertyTypeBoolean, true));
+
+    mcp_server.AddTool("fridge.recipe.recommend",
+        "Recommend a recipe based on the current fridge inventory and display it on the e-paper recipe page. "
+        "(基于当前冰箱库存推荐食谱，并显示到墨水屏食谱页)\n"
+        "You must first determine the recommendation mode from the user's conversation before calling this tool:\n"
+        "1. `fridge_only`: only use ingredients already in the fridge.\n"
+        "2. `mixed_purchase`: use some fridge ingredients and buy some extra ingredients.\n"
+        "Fill the recipe in this normalized format: recommendation mode, dish name, brief recommendation reason, required ingredients, "
+        "extra ingredients to buy when needed, and cooking time. "
+        "The device will return the current fridge inventory snapshot together with the rendered recipe result.",
+        recipe_props,
+        [this](const PropertyList& properties) -> ReturnValue {
+            return HandleRecipeRecommend(properties);
+        });
     
-    ESP_LOGI(TAG, "FridgeMcpTools initialized with 9 tools");
+    ESP_LOGI(TAG, "FridgeMcpTools initialized with 10 tools");
 }
 
 ReturnValue FridgeMcpTools::HandleGetItem(const PropertyList& properties) {
@@ -560,8 +643,8 @@ ReturnValue FridgeMcpTools::HandleItemUpdate(const PropertyList& properties) {
 ReturnValue FridgeMcpTools::HandlePageManager(const PropertyList& properties) {
     try {
         int page = properties["target_page"].value<int>();
-        if (page < 1 || page > 4) {
-            return ReturnValue("Invalid page index. Must be between 1 and 4.");
+        if (page < 1 || page > 5) {
+            return ReturnValue("Invalid page index. Must be between 1 and 5.");
         }
         
         auto* epaper = Board::GetInstance().GetEpaperDisplay();
@@ -578,6 +661,78 @@ ReturnValue FridgeMcpTools::HandlePageManager(const PropertyList& properties) {
         
     } catch (const std::exception& e) {
         ESP_LOGE(TAG, "Error in page manager: %s", e.what());
+        return std::string("Error: ") + e.what();
+    }
+}
+
+ReturnValue FridgeMcpTools::HandleRecipeRecommend(const PropertyList& properties) {
+    try {
+        std::string recommendation_mode = properties["recommendation_mode"].value<std::string>();
+        std::string dish_name = properties["dish_name"].value<std::string>();
+        std::string summary = properties["summary"].value<std::string>();
+        std::string required_ingredients = properties["required_ingredients"].value<std::string>();
+        std::string extra_ingredients = properties["extra_ingredients"].value<std::string>();
+        std::string cooking_time = properties["cooking_time"].value<std::string>();
+        bool switch_page = true;
+        try {
+            switch_page = properties["switch_page"].value<bool>();
+        } catch (...) {
+            switch_page = true;
+        }
+
+        if (recommendation_mode != "fridge_only" && recommendation_mode != "mixed_purchase") {
+            return std::string("Invalid recommendation_mode. Use `fridge_only` or `mixed_purchase`.");
+        }
+
+        if (dish_name.empty()) {
+            return std::string("dish_name cannot be empty.");
+        }
+
+        if (required_ingredients.empty()) {
+            return std::string("required_ingredients cannot be empty.");
+        }
+
+        if (recommendation_mode == "mixed_purchase" && extra_ingredients.empty()) {
+            return std::string("extra_ingredients cannot be empty when recommendation_mode is `mixed_purchase`.");
+        }
+
+        auto* epaper = Board::GetInstance().GetEpaperDisplay();
+        if (epaper == nullptr) {
+            return ReturnValue("E-paper display not found on this board.");
+        }
+
+        auto inventory_items = FridgeManager::GetInstance().GetAllItems();
+        std::string recipe_text = BuildRecipeDisplayText(
+            recommendation_mode,
+            dish_name,
+            summary,
+            required_ingredients,
+            extra_ingredients,
+            cooking_time
+        );
+
+        epaper->SetRecipeContent(recipe_text.c_str());
+        if (switch_page) {
+            epaper->SetPage(RECIPE_PAGE);
+        }
+
+        std::string result_json = "{";
+        result_json += "\"status\":\"success\"";
+        result_json += ",\"page\":4";
+        result_json += ",\"recommendation_mode\":\"" + EscapeJsonString(recommendation_mode) + "\"";
+        result_json += ",\"dish_name\":\"" + EscapeJsonString(dish_name) + "\"";
+        result_json += ",\"summary\":\"" + EscapeJsonString(summary) + "\"";
+        result_json += ",\"required_ingredients\":\"" + EscapeJsonString(required_ingredients) + "\"";
+        result_json += ",\"extra_ingredients\":\"" + EscapeJsonString(extra_ingredients) + "\"";
+        result_json += ",\"cooking_time\":\"" + EscapeJsonString(cooking_time) + "\"";
+        result_json += ",\"recipe_text\":\"" + EscapeJsonString(recipe_text) + "\"";
+        result_json += ",\"current_fridge_items\":" + BuildInventorySnapshotJson(inventory_items);
+        result_json += "}";
+
+        ESP_LOGI(TAG, "[DEBUG] fridge.recipe.recommend result: %s", result_json.c_str());
+        return result_json;
+    } catch (const std::exception& e) {
+        ESP_LOGE(TAG, "Error in recipe recommend: %s", e.what());
         return std::string("Error: ") + e.what();
     }
 }

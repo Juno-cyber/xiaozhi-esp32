@@ -76,6 +76,9 @@ EpaperDisplay::EpaperDisplay(gpio_num_t cs, gpio_num_t dc, gpio_num_t rst, gpio_
     // 初始化 UI（不立即刷新，避免重复刷新卡顿）
     SetupUI();
 
+    // 设置默认纪念日：2023年6月18日
+    SetMemorialDate(2023, 6, 18);
+
     // 监听冰箱数据变化，自动刷新相关标签
     FridgeManager::GetInstance().SetOnDataChanged([this]() {
         this->RefreshFridgeLabels();
@@ -229,6 +232,56 @@ void EpaperDisplay::SetChatMessage(const char* role, const char* content) {
     ESP_LOGD(TAG, "SetChatMessage [%s]: %s", role, content);
 }  
 
+void EpaperDisplay::SetRecipeContent(const char* content) {
+    DisplayLockGuard lock(this);
+
+    auto* recipe_text_label = GetLabel("recipe_textbox_label");
+    if (recipe_text_label == nullptr) {
+        ESP_LOGW(TAG, "recipe_textbox_label not found");
+        return;
+    }
+
+    recipe_text_label->text = String((content != nullptr) ? content : "");
+    recipe_text_label->visible = true;
+
+    if (current_page_ == RECIPE_PAGE) {
+        UpdateUI(false);
+    }
+
+    ESP_LOGD(TAG, "SetRecipeContent: %s", (content != nullptr) ? content : "");
+}
+
+void EpaperDisplay::SetMemorialDate(int year, int month, int day) {
+    DisplayLockGuard lock(this);
+    memorial_year_ = year;
+    memorial_month_ = month;
+    memorial_day_ = day;
+    memorial_date_set_ = true;
+
+    // 更新纪念日天数显示
+    auto* days_label = GetLabel("homepic_memorial_days");
+    if (days_label != nullptr) {
+        days_label->text = [this]() -> String {
+            time_t now = std::time(nullptr);
+            struct tm tm_memorial = {};
+            tm_memorial.tm_year = memorial_year_ - 1900;
+            tm_memorial.tm_mon = memorial_month_ - 1;
+            tm_memorial.tm_mday = memorial_day_;
+            time_t memorial_time = mktime(&tm_memorial);
+            double diff_seconds = difftime(now, memorial_time);
+            int days = static_cast<int>(diff_seconds / (60 * 60 * 24));
+            if (days < 0) days = -days;
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%d天", days);
+            return String(buf);
+        };
+
+    if (current_page_ == HOME_PIC_DISPLAY) {
+        UpdateUI(false);
+    }
+    }
+}
+
 void EpaperDisplay::ShowNotification(const std::string &notification, int duration_ms) {
     ShowNotification(notification.c_str(), duration_ms);
 }
@@ -363,13 +416,19 @@ void EpaperDisplay::UpdateStatusBar(bool update_all) {
                     LabelShow("home_time");
                 }
 
+                // 同步更新 page 5 的时间
+                if (auto* homepic_time = GetLabel("homepic_time")) {
+                    homepic_time->text = String(time_str);
+                    LabelShow("homepic_time");
+                }
+
                 // 检查日期是否变更，若变更则刷新冰箱标签（处理过期状态变化）
                 static int last_mday = -1;
                 if (tm->tm_mday != last_mday) {
                     if (last_mday != -1) { // 避免启动时重复刷新，SetupUI 已经调用过一次
                         RefreshFridgeLabelsInternal();
                         // 如果当前页是冰箱页，需要刷新界面反映最新的过期状态
-                        if (current_page_ == FRIDGE_STATS_PAGE || current_page_ == FOOD_LIST_PAGE) {
+                        if (current_page_ == FRIDGE_STATS_PAGE || current_page_ == FOOD_LIST_PAGE || current_page_ == HOME_PIC_DISPLAY) {
                             UpdateUI(false);
                         }
                     }
@@ -409,13 +468,13 @@ void EpaperDisplay::SetupUI() {
     
     // 1.2 通知文本 (notification_label) - 默认隐藏
     AddLabel("notification_label", new EpaperLabel(
-        EpaperLabel::Text("", 88, 5, 120, 12, 12, u8g2_font_wqy12_t_gb2312, 
+        EpaperLabel::Text("", 88, 5, 120, 16, 12, u8g2_font_wqy12_t_gb2312,
                          GxEPD_BLACK, EpaperTextAlign::CENTER, 1, false, false, 1)));
-    
+
     // 1.3 状态标签 (status_label) - 居中显示
     AddLabel("status_label",
              new EpaperLabel(EpaperLabel::Text(
-                 "waiting", 98, 5, 100, 12, 12, u8g2_font_wqy12_t_gb2312, GxEPD_BLACK,
+                 "waiting", 98, 5, 100, 16, 12, u8g2_font_wqy12_t_gb2312, GxEPD_BLACK,
                  EpaperTextAlign::CENTER, 1, true, false, 1)));
     // 1.4 时间标签（time_label） - 居中显示
     AddLabel("time_label",
@@ -429,9 +488,9 @@ void EpaperDisplay::SetupUI() {
              }, 98, 0, 100, 26, 26, u8g2_font_freedoomr25_mn, GxEPD_BLACK,
                  EpaperTextAlign::CENTER, 1, true, false, 1)));
     
-    // 1.5 静音图标 (mute_label)
+    // 1.5 静音图标 (mute_label) - 位置保持在状态栏内(y=0~31)
     AddLabel("mute_label", new EpaperLabel(
-        EpaperLabel::Text("", 260, 15, 0, 0, 21, u8g2_font_emoticons21_tr, 
+        EpaperLabel::Text("", 260, 0, 0, 0, 21, u8g2_font_emoticons21_tr,
                          GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 1)));
     
     // 1.6 电池图标 (battery_label)
@@ -462,7 +521,7 @@ void EpaperDisplay::SetupUI() {
     
     // 2.3 聊天消息 (chat_message_label)
     AddLabel("chat_message_label", new EpaperLabel(
-        EpaperLabel::Text("", 28, 85, 240, 0, 16, u8g2_font_wqy16_t_gb2312, 
+        EpaperLabel::Text("", 28, 85, 240, 0, 16, u8g2_font_wqy16_t_gb2312,
                          GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 1)));
     
     // ===== 3. 低电量弹窗 (low_battery_popup) - 默认隐藏 =====
@@ -471,7 +530,7 @@ void EpaperDisplay::SetupUI() {
         EpaperLabel::RoundRect(20, 100, 256, 20, 6, true, GxEPD_BLACK, 1, false, 1)));
     
     AddLabel("low_battery_label", new EpaperLabel(
-        EpaperLabel::Text("电量低，请充电", 103, 113, 90, 0, 16, u8g2_font_wqy16_t_gb2312, 
+        EpaperLabel::Text("电量低，请充电", 103, 102, 90, 0, 16, u8g2_font_wqy16_t_gb2312,
                          GxEPD_WHITE, EpaperTextAlign::CENTER, 1, false, false, 1)));
 // ==========================================================page 1 end==========================================================    
 // ==========================================================page 2：HOME DashBoard start========================================================
@@ -547,47 +606,87 @@ void EpaperDisplay::SetupUI() {
 
 // ==========================================================page 3 end=============================================
 // ==========================================================page 4：AI Recipe start=============================================
-    
-    // ===== 4.1 左侧推荐食品大图 =====
-    // 图片占据左半部分（约宽150像素）
-    AddLabel("recipe_food_image", new EpaperLabel(
-        EpaperLabel::Bitmap(10, 35, EpaperImage::food_cooker_72x72, 72, 72, 1, 1, false, false, false, true, 4)));
-    
-    // ===== 4.2 右侧分隔线 =====
-    AddLabel("recipe_divider", new EpaperLabel(
-        EpaperLabel::Line(165, 35, 165, 120, 2, GxEPD_BLACK, 1, true, 4)));
-    
-    // ===== 4.3 右侧烹饪信息 =====
-    // 食品名称
-    AddLabel("recipe_food_name", new EpaperLabel(
-        EpaperLabel::Text("番茄鸡蛋汤", 175, 37, 110, 20, 16, u8g2_font_wqy16_t_gb2312, 
-                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 4)));
-    
-    // 烹饪时间标签
-    AddLabel("recipe_time_label", new EpaperLabel(
-        EpaperLabel::Text("耗时:", 175, 55, 35, 16, 12, u8g2_font_wqy12_t_gb2312, 
-                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 4)));
-    AddLabel("recipe_time_value", new EpaperLabel(
-        EpaperLabel::Text("15分钟", 215, 55, 70, 16, 12, u8g2_font_wqy12_t_gb2312, 
-                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 4)));
-    
-    // 消耗食材标签
-    AddLabel("recipe_ingredients_label", new EpaperLabel(
-        EpaperLabel::Text("食材:", 175, 70, 35, 16, 12, u8g2_font_wqy12_t_gb2312, 
-                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 4)));
-    
-    // 消耗食材列表（最多显示2-3行）
-    AddLabel("recipe_ingredient_1", new EpaperLabel(
-        EpaperLabel::Text("番茄×2", 175, 85, 110, 14, 12, u8g2_font_wqy12_t_gb2312, 
-                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 4)));
-    AddLabel("recipe_ingredient_2", new EpaperLabel(
-        EpaperLabel::Text("鸡蛋×3", 175, 100, 110, 14, 12, u8g2_font_wqy12_t_gb2312, 
-                         GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 4)));
-    AddLabel("recipe_ingredient_3", new EpaperLabel(
-        EpaperLabel::Text("盐/味精", 175, 115, 110, 14, 12, u8g2_font_wqy12_t_gb2312, 
+
+    // ===== 4.1 页面标题栏 =====
+    AddLabel("recipe_page_icon", new EpaperLabel(
+        EpaperLabel::Bitmap(10, 2, EpaperImage::Fridge_24x24, 24, 24, 1, 1, false, false, false, true, 4)));
+
+    AddLabel("recipe_page_title", new EpaperLabel(
+        EpaperLabel::Text("AI食谱推荐", 40, 4, 200, 24, 16, u8g2_font_wqy16_t_gb2312,
                          GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 4)));
 
+    AddLabel("recipe_page_divider", new EpaperLabel(
+        EpaperLabel::Line(10, 32, 286, 32, 2, GxEPD_BLACK, 1, true, 4)));
+
+    // ===== 4.2 左图右文布局 =====
+    AddLabel("recipe_food_image", new EpaperLabel(
+        EpaperLabel::Bitmap(5, 42, EpaperImage::food_cooker_72x72, 72, 72, 1, 1, false, false, false, true, 4)));
+
+    AddLabel("recipe_textbox_border", new EpaperLabel(
+        EpaperLabel::RoundRect(85, 36, 203, 90, 4, false, GxEPD_BLACK, 1, true, 4)));
+
+    AddLabel("recipe_textbox_label", new EpaperLabel(
+        EpaperLabel::Text(
+            "番茄鸡蛋汤（20分钟）\n推荐: 清淡快手\n需要: 番茄,鸡蛋,盐\n采购: 无",
+            93, 42, 188, 13, 12, u8g2_font_wqy12_t_gb2312,
+            GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 4)));
+
 // ==========================================================page 4 end=====================================================    
+// ==========================================================page 5：HOME Picture Display start=============================================
+
+    // 爱心图片（居中放在相框内偏上位置）
+    AddLabel("homepic_image", new EpaperLabel(
+        EpaperLabel::Bitmap(5, 0, EpaperImage::xh_xj_126x126, 126, 126, 1, 1, false, false, false, true, 5)));
+
+    // ===== 5.3 右侧：当前时间（大字，右对齐） =====
+    // h=50 给 mystery_quest_56_tn 足够高度，同时避免刷新窗口下沿溢出覆盖日期文本
+    AddLabel("homepic_time", new EpaperLabel(
+        EpaperLabel::Text([]() {
+            time_t now = std::time(nullptr);
+            struct tm tm_now;
+            localtime_r(&now, &tm_now);
+            char buf[16];
+            strftime(buf, sizeof(buf), "%H:%M", &tm_now);
+            return String(buf);
+        }, 140, 5, 150, 45, 45, u8g2_font_mystery_quest_56_tn,
+        GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 5)));
+
+    // ===== 5.4 右侧：年月日 + 星期（右对齐） =====
+    // h=18 覆盖 wqy16 字体的实际高度（ascent+descent≈16px）
+    AddLabel("homepic_date", new EpaperLabel(
+        EpaperLabel::Text([]() {
+            time_t now = std::time(nullptr);
+            struct tm tm_now;
+            localtime_r(&now, &tm_now);
+            char buf[32];
+            strftime(buf, sizeof(buf), "%Y-%m-%d", &tm_now);
+            const char* weekdays[] = {"周日", "周一", "周二", "周三", "周四", "周五", "周六"};
+            return String(buf) + " " + String(weekdays[tm_now.tm_wday]);
+        }, 140, 55, 140, 16, 16, u8g2_font_wqy16_t_gb2312,
+        GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 5)));
+
+    // ===== 5.5 右侧：爱心图标 + 纪念日天数（右对齐） =====
+    AddLabel("homepic_heart_icon", new EpaperLabel(
+        EpaperLabel::Bitmap(148, 72, EpaperImage::ICON_heart_32x32, 32, 32, 1, 1, false, false, false, true, 5)));
+
+    AddLabel("homepic_memorial_days", new EpaperLabel(
+        EpaperLabel::Text([this]() -> String {
+            if (!memorial_date_set_) {
+                return "未设置";
+            }
+            time_t now = std::time(nullptr);
+            struct tm tm_memorial = {};
+            tm_memorial.tm_year = memorial_year_ - 1900;
+            tm_memorial.tm_mon = memorial_month_ - 1;
+            tm_memorial.tm_mday = memorial_day_;
+            time_t memorial_time = mktime(&tm_memorial);
+            double diff_seconds = difftime(now, memorial_time);
+            int days = static_cast<int>(diff_seconds / (60 * 60 * 24));
+            if (days < 0) days = -days;
+            return String(days) + "天";
+        }, 172, 78, 60, 16, 16, u8g2_font_wqy16_t_gb2312,
+        GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 5)));
+// ==========================================================page 5：HOME Picture Display end=============================================
 
     ui_dirty_ = true;
 }
@@ -683,7 +782,7 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
     if (label == nullptr) return;
     
     // 设置旋转方向
-    display_epaper.setRotation(label->rotation);
+    display_epaper.setRotation(display_rotation_);
     
     // 如果不可见，仅用白色填充区域来清除内容
     if (!label->visible) {
@@ -973,7 +1072,7 @@ void EpaperDisplay::UpdateLabel(const String& id) {
     
     // 如果是文本类型，需要动态计算边界
     if (label->type == EpaperObjectType::TEXT) {
-        display_epaper.setRotation(label->rotation);
+        display_epaper.setRotation(display_rotation_);
         
         // 使用 U8g2 字体边界计算
         if (label->u8g2_font != nullptr) {
@@ -981,12 +1080,12 @@ void EpaperDisplay::UpdateLabel(const String& id) {
             
             // 保存旧的宽度和高度
             uint16_t old_h = label->h;
-            
+
             // 动态计算新文本的边界
             auto bounds = CalculateTextBounds(label);
             uint16_t new_w = bounds.w;
             uint16_t new_h = bounds.h;
-            
+
             // 宽度和高度都比较取最大值
             refresh_x = bounds.x;
             refresh_y = bounds.y;
@@ -995,7 +1094,7 @@ void EpaperDisplay::UpdateLabel(const String& id) {
 
             // 更新 label 的 h 为新计算的值
             label->h = new_h;
-            
+
             ESP_LOGI(TAG, "Label '%s',refresh_x=%d,refresh_y=%d, old_h=%d, new: w=%d h=%d, refresh: w=%d h=%d", 
                      id.c_str(), refresh_x, refresh_y, old_h, new_w, new_h, refresh_w, refresh_h);
         } else {
@@ -1018,6 +1117,7 @@ void EpaperDisplay::UpdateLabel(const String& id) {
         return;
     }
     
+    display_epaper.setRotation(display_rotation_);
     display_epaper.setPartialWindow(label->x, refresh_y, refresh_w, refresh_h);
     display_epaper.firstPage();
     do {
@@ -1170,104 +1270,96 @@ void EpaperDisplay::RenderTextWithWrap(EpaperLabel* label) {
     u8g2_for_gfx.setForegroundColor(label->color);
     
     String text = label->text();
-    
-    // 先检查整个文本是否超出宽度，如果没超出就不换行
-    int16_t total_width = u8g2_for_gfx.getUTF8Width(text.c_str());
-    if (total_width <= label->w_max) {
-        // 文本没有超出宽度，单行显示
-        int16_t cursor_x = label->x;
-        if (label->align == EpaperTextAlign::CENTER) {
-            cursor_x = label->x + (label->w_max - total_width) / 2;
-        } else if (label->align == EpaperTextAlign::RIGHT) {
-            cursor_x = label->x + label->w_max - total_width;
-        }
-        u8g2_for_gfx.setCursor(cursor_x, label->y);
-        u8g2_for_gfx.print(text);
-        return;
-    }
-    
-    // 文本超出宽度，需要换行
     int16_t cursor_y = label->y;
-    // getFontAscent() 就是行高，再加上2像素行间距
     int16_t line_height = u8g2_for_gfx.getFontAscent() + 6;
-    
-    // 按照宽度限制进行换行
-    int text_len = text.length();
-    int start_idx = 0;
-    
-    while (start_idx < text_len) {
-        String line = "";
-        int end_idx = start_idx;
-        int16_t line_width = 0;
-        
-        // 逐个字符测试，直到超出宽度
-        while (end_idx < text_len) {
-            // 获取下一个 UTF-8 字符
-            String next_char = "";
-            uint8_t c = text[end_idx];
-            
-            if ((c & 0x80) == 0) {
-                // ASCII 字符 (0xxxxxxx)
-                next_char = String((char)c);
-                end_idx++;
-            } else if ((c & 0xE0) == 0xC0) {
-                // 2字节 UTF-8 (110xxxxx 10xxxxxx)
-                if (end_idx + 1 < text_len) {
-                    next_char = text.substring(end_idx, end_idx + 2);
-                    end_idx += 2;
-                } else {
-                    break;
-                }
-            } else if ((c & 0xF0) == 0xE0) {
-                // 3字节 UTF-8 (1110xxxx 10xxxxxx 10xxxxxx)
-                if (end_idx + 2 < text_len) {
-                    next_char = text.substring(end_idx, end_idx + 3);
-                    end_idx += 3;
-                } else {
-                    break;
-                }
-            } else if ((c & 0xF8) == 0xF0) {
-                // 4字节 UTF-8 (11110xxx 10xxxxxx 10xxxxxx 10xxxxxx)
-                if (end_idx + 3 < text_len) {
-                    next_char = text.substring(end_idx, end_idx + 4);
-                    end_idx += 4;
-                } else {
-                    break;
-                }
-            } else {
-                // 无效的 UTF-8，跳过
-                end_idx++;
-                continue;
-            }
-            
-            // 测试添加该字符后的宽度
-            String test_line = line + next_char;
-            int16_t test_width = u8g2_for_gfx.getUTF8Width(test_line.c_str());
-            
-            if (test_width > label->w_max && line.length() > 0) {
-                // 超出宽度，回退
-                end_idx -= next_char.length();
-                break;
-            }
-            
-            line = test_line;
-            line_width = test_width;
-        }
-        
-        // 渲染这一行，应用对齐方式
+
+    auto render_line = [&](const String& line) {
+        int16_t line_width = u8g2_for_gfx.getUTF8Width(line.c_str());
         int16_t cursor_x = label->x;
         if (label->align == EpaperTextAlign::CENTER) {
             cursor_x = label->x + (label->w_max - line_width) / 2;
         } else if (label->align == EpaperTextAlign::RIGHT) {
             cursor_x = label->x + label->w_max - line_width;
         }
-        
+
         u8g2_for_gfx.setCursor(cursor_x, cursor_y);
         u8g2_for_gfx.print(line);
-        
-        // 移动到下一行
         cursor_y += line_height;
-        start_idx = end_idx;
+    };
+
+    int text_len = text.length();
+    int start_idx = 0;
+
+    while (start_idx < text_len) {
+        int explicit_break = text.indexOf('\n', start_idx);
+        String paragraph = (explicit_break >= 0) ? text.substring(start_idx, explicit_break) : text.substring(start_idx);
+
+        if (paragraph.length() == 0) {
+            render_line("");
+        } else {
+            int paragraph_len = paragraph.length();
+            int local_start = 0;
+
+            while (local_start < paragraph_len) {
+                String line = "";
+                int local_end = local_start;
+
+                while (local_end < paragraph_len) {
+                    String next_char = "";
+                    uint8_t c = paragraph[local_end];
+
+                    if ((c & 0x80) == 0) {
+                        next_char = String((char)c);
+                        local_end++;
+                    } else if ((c & 0xE0) == 0xC0) {
+                        if (local_end + 1 < paragraph_len) {
+                            next_char = paragraph.substring(local_end, local_end + 2);
+                            local_end += 2;
+                        } else {
+                            break;
+                        }
+                    } else if ((c & 0xF0) == 0xE0) {
+                        if (local_end + 2 < paragraph_len) {
+                            next_char = paragraph.substring(local_end, local_end + 3);
+                            local_end += 3;
+                        } else {
+                            break;
+                        }
+                    } else if ((c & 0xF8) == 0xF0) {
+                        if (local_end + 3 < paragraph_len) {
+                            next_char = paragraph.substring(local_end, local_end + 4);
+                            local_end += 4;
+                        } else {
+                            break;
+                        }
+                    } else {
+                        local_end++;
+                        continue;
+                    }
+
+                    String test_line = line + next_char;
+                    int16_t test_width = u8g2_for_gfx.getUTF8Width(test_line.c_str());
+                    if (test_width > label->w_max && line.length() > 0) {
+                        local_end -= next_char.length();
+                        break;
+                    }
+
+                    line = test_line;
+                }
+
+                render_line(line);
+
+                if (local_end == local_start) {
+                    local_end++;
+                }
+                local_start = local_end;
+            }
+        }
+
+        if (explicit_break < 0) {
+            break;
+        }
+        start_idx = explicit_break + 1;
     }
 }
 
@@ -1302,73 +1394,86 @@ EpaperDisplay::TextBounds EpaperDisplay::CalculateTextBounds(EpaperLabel* label)
         bounds.h = line_height;
         return bounds;
     }
-    // --- ②：有宽度限制，先测单行是否 fits ---
-    int16_t total_width = u8g2_for_gfx.getUTF8Width(label_text.c_str());
-    if (total_width <= label->w_max) {
-        int16_t bounds_x = label->x;
-        if (label->align == EpaperTextAlign::CENTER)
-            bounds_x = label->x + (label->w_max - total_width) / 2;
-        else if (label->align == EpaperTextAlign::RIGHT)
-            bounds_x = label->x + label->w_max - total_width;
-
-        bounds.x = bounds_x;
-        bounds.y = (label->y > ascent) ? (label->y - ascent) : 0;
-        bounds.w = total_width;
-        bounds.h = line_height;
-        return bounds;
-    }
-
-    // --- ③：多行计算（核心）---
     String text = label_text;
     int text_len = text.length();
     int start_idx = 0;
-
     int16_t max_width = 0;
     int line_count = 0;
 
     while (start_idx < text_len) {
-        String line = "";
-        int end_idx = start_idx;
+        int explicit_break = text.indexOf('\n', start_idx);
+        String paragraph = (explicit_break >= 0) ? text.substring(start_idx, explicit_break) : text.substring(start_idx);
 
-        // UTF8 按字符扩展
-        while (end_idx < text_len) {
-            String next_char = "";
-            uint8_t c = text[end_idx];
+        if (paragraph.length() == 0) {
+            line_count++;
+        } else {
+            int paragraph_len = paragraph.length();
+            int local_start = 0;
 
-            if ((c & 0x80) == 0) {
-                next_char = String((char)c);
-                end_idx++;
-            } else if ((c & 0xE0) == 0xC0) {
-                next_char = text.substring(end_idx, end_idx + 2);
-                end_idx += 2;
-            } else if ((c & 0xF0) == 0xE0) {
-                next_char = text.substring(end_idx, end_idx + 3);
-                end_idx += 3;
-            } else if ((c & 0xF8) == 0xF0) {
-                next_char = text.substring(end_idx, end_idx + 4);
-                end_idx += 4;
-            } else {
-                end_idx++;
-                continue;
+            while (local_start < paragraph_len) {
+                String line = "";
+                int local_end = local_start;
+
+                while (local_end < paragraph_len) {
+                    String next_char = "";
+                    uint8_t c = paragraph[local_end];
+
+                    if ((c & 0x80) == 0) {
+                        next_char = String((char)c);
+                        local_end++;
+                    } else if ((c & 0xE0) == 0xC0) {
+                        if (local_end + 1 < paragraph_len) {
+                            next_char = paragraph.substring(local_end, local_end + 2);
+                            local_end += 2;
+                        } else {
+                            break;
+                        }
+                    } else if ((c & 0xF0) == 0xE0) {
+                        if (local_end + 2 < paragraph_len) {
+                            next_char = paragraph.substring(local_end, local_end + 3);
+                            local_end += 3;
+                        } else {
+                            break;
+                        }
+                    } else if ((c & 0xF8) == 0xF0) {
+                        if (local_end + 3 < paragraph_len) {
+                            next_char = paragraph.substring(local_end, local_end + 4);
+                            local_end += 4;
+                        } else {
+                            break;
+                        }
+                    } else {
+                        local_end++;
+                        continue;
+                    }
+
+                    String test_line = line + next_char;
+                    int16_t test_w = u8g2_for_gfx.getUTF8Width(test_line.c_str());
+                    if (test_w > label->w_max && line.length() > 0) {
+                        local_end -= next_char.length();
+                        break;
+                    }
+
+                    line = test_line;
+                }
+
+                int16_t line_width = u8g2_for_gfx.getUTF8Width(line.c_str());
+                if (line_width > max_width) {
+                    max_width = line_width;
+                }
+
+                line_count++;
+                if (local_end == local_start) {
+                    local_end++;
+                }
+                local_start = local_end;
             }
-
-            String test_line = line + next_char;
-            int16_t test_w = u8g2_for_gfx.getUTF8Width(test_line.c_str());
-
-            if (test_w > label->w_max && line.length() > 0) {
-                end_idx -= next_char.length();
-                break;
-            }
-
-            line = test_line;
         }
 
-        int16_t line_width = u8g2_for_gfx.getUTF8Width(line.c_str());
-        if (line_width > max_width)
-            max_width = line_width;
-
-        line_count++;
-        start_idx = end_idx;
+        if (explicit_break < 0) {
+            break;
+        }
+        start_idx = explicit_break + 1;
     }
 
     // --- ④：根据对齐方式计算 bounds.x ---

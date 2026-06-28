@@ -23,6 +23,7 @@ private:
     ReturnValue HandleItemList(const PropertyList& properties);
     ReturnValue HandleItemUpdate(const PropertyList& properties);
     ReturnValue HandlePageManager(const PropertyList& properties);
+    ReturnValue HandleRecipeRecommend(const PropertyList& properties);
 };
 
 #endif // FRIDGE_MCP_H

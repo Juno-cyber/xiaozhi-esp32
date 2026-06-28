@@ -100,9 +100,20 @@ static const gc9a01_lcd_init_cmd_t gc9107_lcd_init_cmds[] = {
  
 #define TAG "CompactWifiBoardEpaperX"
 
+// 墨水屏 SPI 引脚初始化辅助结构体
+// 必须作为 CompactWifiBoardEpaperX 的第一个成员（最先构造），
+// 确保在 GxEPD2 调用 SPI.begin() 之前用自定义引脚初始化好 FSPI 总线。
+// 注意：不能用 spi_bus_initialize(SPI2_HOST) — Arduino SPI 库走的是
+// 直接寄存器操作路径（spiAttachMOSI/spiAttachSCK），与 ESP-IDF 驱动路径互不干扰。
+struct EpaperSpiInit {
+    EpaperSpiInit() {
+        SPI.begin(EPAPER_SCK, -1, EPAPER_MOSI, -1);  // SCK, MISO(不接), MOSI, SS
+    }
+};
+
 class CompactWifiBoardEpaperX : public WifiBoard {
 private:
- 
+    EpaperSpiInit epaper_spi_init_;   // 必须第一个成员 — 在 display_epaper/epaperdisplay 构造前初始化 SPI2_HOST
     Button boot_button_;
     LcdDisplay* display_;
     // 2.9寸屏
@@ -110,6 +121,7 @@ private:
     EpaperDisplay epaperdisplay;
 
     void InitializeSpi() {
+        // LCD 显示屏 SPI (SPI3_HOST)
         spi_bus_config_t buscfg = {};
         buscfg.mosi_io_num = DISPLAY_MOSI_PIN;
         buscfg.miso_io_num = GPIO_NUM_NC;

@@ -71,6 +71,10 @@ extern const unsigned char EMO_SLEEPY_32x32[128] PROGMEM;       // 😴 SLEEPY
 extern const unsigned char EMO_SILLY_32x32[128] PROGMEM;        // 😜 SILLY
 extern const unsigned char EMO_CONFUSED_32x32[128] PROGMEM;     // 🙄 CONFUSED
 
+// ============ 其他图标 ============
+extern const unsigned char ICON_heart_32x32[128] PROGMEM;       // ❤️ HEART
+extern const unsigned char ICON_robot_32x32[128] PROGMEM;       // 🤖 ROBOT
+
 // ============ 冰箱的icon (32x32) ============
 extern const unsigned char Fridge_32x32[128] PROGMEM;           // 冰箱
 extern const unsigned char Fridge_warning_32x32[128] PROGMEM;          // 告警
@@ -92,6 +96,9 @@ extern const unsigned char food_quick_24x24[72] PROGMEM;         // 9.速食食�
 extern const unsigned char food_other_24x24[72] PROGMEM;          // 10.其他
 // ============ 食材icon (72x72) ============
 extern const unsigned char food_cooker_72x72[648] PROGMEM;          // cooker
+
+// ============ 图片 ============
+extern const unsigned char xh_xj_126x126[2016] PROGMEM;
 
 // ============ 食材分类->图标映射表 ============
 // 注意：需要包含 fridge_enum_utils.h 才能使用此映射表
