@@ -10,6 +10,7 @@
 #include "led/single_led.h"
 #include "Fridge/fridge_mcp.h"
 #include "Fridge/fridge_manager.h"
+#include "local_control.h"
 
 #include <wifi_station.h>
 #include <esp_log.h>
@@ -199,6 +200,25 @@ private:
         auto& mcp_server = McpServer::GetInstance();
         static FridgeMcpTools fridge_mcp;
         fridge_mcp.Initialize();
+
+        // 启动局域网本地控制 HTTP 服务器（等 WiFi 连上后自动启动）
+        auto& lc = LocalControl::GetInstance();
+        Application::GetInstance().mcp_message_hook_ = [&lc](const std::string& payload) -> bool {
+            return lc.CaptureResponse(payload);
+        };
+        // 后台等待 WiFi 连接后再启动 HTTP 服务器（避免 lwip 未初始化导致 assert 崩溃）
+        std::thread([]() {
+            // 等待 WiFi 连接，最多等 60 秒
+            for (int i = 0; i < 60; ++i) {
+                if (WifiStation::GetInstance().IsConnected()) {
+                    ESP_LOGI(TAG, "WiFi connected, starting LocalControl HTTP server...");
+                    LocalControl::GetInstance().Start();
+                    return;
+                }
+                vTaskDelay(pdMS_TO_TICKS(1000));
+            }
+            ESP_LOGW(TAG, "WiFi not connected after 60s, skipping LocalControl start");
+        }).detach();
     }
 
 public:
