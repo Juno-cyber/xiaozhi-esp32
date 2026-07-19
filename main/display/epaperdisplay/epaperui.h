@@ -85,6 +85,8 @@ public:
     // 位图属性
     const uint8_t* bitmap = nullptr;
     uint16_t depth = 1;      // 1=黑白, 3=三色, 7=七色
+    char image_name[32] = {0};  // 图片文件名（用于持久化恢复，canvas.add_image 时设置）
+    char dynamic_type[16] = {0};  // 动态类型: clock/date/datetime/cpu_temp/heap/uptime
 
     // 线段/三角形属性
     int16_t x1 = 0, y1 = 0;
@@ -173,7 +175,8 @@ public:
                               bool mirror_v = false,
                               bool invert = false,
                               bool visible = true,
-                              uint16_t page = 1) {
+                              uint16_t page = 1,
+                              const char* image_name = nullptr) {
         EpaperLabel obj;
         obj.type = EpaperObjectType::BITMAP;
         obj.x = x; obj.y = y;
@@ -186,6 +189,9 @@ public:
         obj.invert = invert;
         obj.visible = visible;
         obj.page = page;
+        if (image_name) {
+            strncpy(obj.image_name, image_name, sizeof(obj.image_name) - 1);
+        }
         return obj;
     }
 

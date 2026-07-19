@@ -58,7 +58,8 @@ enum EpaperPage {
     FRIDGE_STATS_PAGE = 2,
     FOOD_LIST_PAGE = 3,
     RECIPE_PAGE = 4,
-    HOME_PIC_DISPLAY = 5
+    HOME_PIC_DISPLAY = 5,
+    CANVAS_PAGE = 6  // 自由画布页，Hermes 可动态放置文本/线条/矩形等控件
 };
 
 class EpaperDisplay : public Display {
@@ -80,9 +81,11 @@ public:
     EpaperLabel* GetLabel(const String& id);           // 获取 label 指针，用于修改属性
     void UpdateLabel(const String& id);                 // 刷新单个 label
     void UpdateUI(bool fullRefresh = false);            // 刷新所有 label
-    void SetPage(uint16_t page);                         // 切换页面并全局刷新
+    void SetPage(uint16_t page, bool refresh = true);     // 切换页面，可选择是否立即全局刷新
     void AddLabel(const String& id, EpaperLabel* label); // 动态添加 label
     void RemoveLabel(const String& id);                 // 移除 label
+    std::map<String, EpaperLabel*>* GetAllLabels();     // 获取全部 labels（用于持久化遍历）
+    uint16_t GetCurrentPage() const { return current_page_; }  // 获取当前页面编号
     
     // 显示/隐藏控制方法
     void LabelShow(const String& id);                      // 显示指定 label
@@ -91,6 +94,8 @@ public:
     void RefreshFridgeLabelsInternal();                    // 刷新冰箱相关标签 (内部使用，不加锁)
     void SetRecipeContent(const char* content);            // 更新 AI 食谱文本
     void SetMemorialDate(int year, int month, int day);   // 设置纪念日日期
+    void ShowCanvasPage();                                  // 切换到画布页并强制刷新
+    int ClearCanvasLabels();                               // 删除所有 canvas_ 前缀的控件，返回删除数
 
 protected:
     esp_pm_lock_handle_t pm_lock_ = nullptr;

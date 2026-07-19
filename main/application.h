@@ -7,6 +7,7 @@
 #include <esp_timer.h>
 
 #include <string>
+#include <functional>
 #include <mutex>
 #include <deque>
 #include <memory>
@@ -62,6 +63,8 @@ public:
     bool UpgradeFirmware(Ota& ota, const std::string& url = "");
     bool CanEnterSleepMode();
     void SendMcpMessage(const std::string& payload);
+    // 本地控制钩子：返回 true 表示响应已被本地捕获，不再发往云端。
+    std::function<bool(const std::string&)> mcp_message_hook_;
     void SetAecMode(AecMode mode);
     AecMode GetAecMode() const { return aec_mode_; }
     void PlaySound(const std::string_view& sound);

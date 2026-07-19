@@ -109,6 +109,13 @@ void AfeWakeWord::Feed(const std::vector<int16_t>& data) {
     if (afe_data_ == nullptr) {
         return;
     }
+    // 唤醒词检测到后，AudioDetectionTask 会调用 Stop() 清除 DETECTION_RUNNING_EVENT，
+    // 但 AudioService 的 AS_EVENT_WAKE_WORD_RUNNING 位仍置位，AudioInputTask 会继续调 Feed()。
+    // 此时 AudioDetectionTask 已停止 fetch，数据会塞满 AFE ringbuffer 导致溢出警告和延迟。
+    // 在此检查：如果检测已停止，直接丢弃数据，不往 AFE 喂。
+    if (!(xEventGroupGetBits(event_group_) & DETECTION_RUNNING_EVENT)) {
+        return;
+    }
     afe_iface_->feed(afe_data_, data.data());
 }
 

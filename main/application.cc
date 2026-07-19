@@ -11,6 +11,7 @@
 #include "settings.h"
 
 #include <cstring>
+#include <ctime>
 #include <esp_log.h>
 #include <cJSON.h>
 #include <driver/gpio.h>
@@ -351,8 +352,7 @@ void Application::Start() {
 
     /* Setup the display */
     auto display = board.GetDisplay();
-    auto display_epaper = board.GetEpaperDisplay();
-    display_epaper->UpdateUI(false);     // 手动触发首次显示（局部刷新，快）  
+    static_cast<EpaperDisplay*>(display)->UpdateUI(false);     // 手动触发首次显示（局部刷新，快）  
 
     // Print board name/version info
     display->SetChatMessage("system", SystemInfo::GetUserAgent().c_str());
@@ -395,6 +395,32 @@ void Application::Start() {
     // Check for new firmware version or get the MQTT broker address
     Ota ota;
     CheckNewVersion(ota);
+
+    // 创建后台任务等待系统时间同步后再刷新界面；避开语音热路径，避免影响唤醒和首句播放。
+    xTaskCreate([](void* arg) {
+        ESP_LOGI("Application", "Waiting for system time to be valid (> 2026)...");
+        while (true) {
+            time_t now = std::time(nullptr);
+            struct tm* tm = std::localtime(&now);
+            if (tm && tm->tm_year >= (2026 - 1900)) {
+                auto& app = Application::GetInstance();
+                auto state = app.GetDeviceState();
+                if (state == kDeviceStateConnecting || state == kDeviceStateListening ||
+                    state == kDeviceStateSpeaking) {
+                    vTaskDelay(pdMS_TO_TICKS(1000));
+                    continue;
+                }
+                ESP_LOGI("Application", "System time is valid, triggering initial UI update");
+                auto display = static_cast<EpaperDisplay*>(Board::GetInstance().GetDisplay());
+                if (display) {
+                    display->SetPage(display->GetCurrentPage(), true);
+                }
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+        vTaskDelete(nullptr);
+    }, "wait_time_sync", 2048, nullptr, 1, nullptr);
 
     // Initialize the protocol
     display->SetStatus(Lang::Strings::LOADING_PROTOCOL);
@@ -602,9 +628,7 @@ void Application::MainEventLoop() {
         if (bits & MAIN_EVENT_CLOCK_TICK) {
             clock_ticks_++;
             auto display = Board::GetInstance().GetDisplay();
-            auto display_epaper = Board::GetInstance().GetEpaperDisplay();
-            display->UpdateStatusBar();
-            display_epaper->UpdateStatusBar(true);
+            display->UpdateStatusBar(false);
         
             // Print the debug info every 10 seconds
             if (clock_ticks_ % 10 == 0) {
@@ -675,6 +699,10 @@ void Application::SetDeviceState(DeviceState state) {
     clock_ticks_ = 0;
     auto previous_state = device_state_;
     device_state_ = state;
+    if (state == kDeviceStateSpeaking) {
+        // TTS 音频包可能在状态切换后立刻到达；先清空解码器，避免慢速墨水屏刷新后再 reset 丢掉首包音频。
+        audio_service_.ResetDecoder();
+    }
     ESP_LOGI(TAG, "STATE: %s", STATE_STRINGS[device_state_]);
 
     // Send the state change event
@@ -686,6 +714,11 @@ void Application::SetDeviceState(DeviceState state) {
     led->OnStateChanged();
     switch (state) {
         case kDeviceStateUnknown:
+        case kDeviceStateStarting:
+        case kDeviceStateWifiConfiguring:
+            // 配网模式和初始连接状态切回对话页，但不立即刷新，避免阻塞启动/音频链路。
+            static_cast<EpaperDisplay*>(display)->SetPage(CHAT_PAGE, false);
+            break;
         case kDeviceStateIdle:
             display->SetStatus(Lang::Strings::STANDBY);
             display->SetEmotion("neutral");
@@ -717,7 +750,6 @@ void Application::SetDeviceState(DeviceState state) {
                 // Only AFE wake word can be detected in speaking mode
                 audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
             }
-            audio_service_.ResetDecoder();
             break;
         default:
             // Do nothing
@@ -830,6 +862,10 @@ bool Application::CanEnterSleepMode() {
 }
 
 void Application::SendMcpMessage(const std::string& payload) {
+    if (mcp_message_hook_ && mcp_message_hook_(payload)) {
+        return;
+    }
+
     if (protocol_ == nullptr) {
         return;
     }

@@ -8,15 +8,17 @@
 // 同一局域网内的 PC 可通过 HTTP POST 调用设备端 MCP 工具。
 //
 // 端点：
-//   GET  /            健康检查，返回设备信息
-//   POST /mcp         原始 JSON-RPC 2.0（与云端 LLM 走同一路径）
-//   POST /api/call    简化调用 {"tool":"fridge.pagemanager","args":{"target_page":3}}
+//   GET  /                       健康检查，返回设备信息
+//   POST /mcp                    原始 JSON-RPC 2.0（与云端 LLM 走同一路径）
+//   POST /api/call               简化调用 {"tool":"fridge.pagemanager","args":{"target_page":3}}
+//   POST /api/canvas_image       上传图片到 canvas_data 分区
+//   GET  /api/canvas_image?name= 查询已存储的图片列表
 //
 // mDNS: 设备注册为 xiaozhi.local（可在浏览器/curl 中直接使用）
 class LocalControl {
 public:
     static LocalControl& GetInstance();
-    void Start();  // 启动 HTTP 服务器 + mDNS（在 WiFi 连接后调用）
+    void Start();  // 启动 HTTP 服务器 + mDNS + 挂载 canvas_data（在 WiFi 连接后调用）
 
     // 响应捕获：由 McpServer::ReplyResult/ReplyError 调用
     // 返回 true 表示响应已被本地捕获
@@ -34,6 +36,11 @@ private:
     static esp_err_t HandleHealth(httpd_req_t* req);
     static esp_err_t HandleMcpPost(httpd_req_t* req);
     static esp_err_t HandleApiCall(httpd_req_t* req);
+    static esp_err_t HandleCanvasImageUpload(httpd_req_t* req);
+    static esp_err_t HandleCanvasImageList(httpd_req_t* req);
+
+    // 挂载 canvas_data 分区为 LittleFS
+    void MountCanvasStorage();
 
     // 启动 mDNS 服务
     void StartMdns();

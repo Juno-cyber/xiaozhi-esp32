@@ -1,10 +1,21 @@
 #include "fridge_mcp.h"
 #include "board.h"
 #include "display/epaperdisplay/epaper_display.h"
+#include "custom_page_manager.h"
 #include <esp_log.h>
 #include <sstream>
+#include <cstring>
+#include <cstdio>
+#include <unistd.h>
 
 static const char* TAG = "FridgeMCP";
+
+// Canvas 布局持久化文件
+static const char* CANVAS_LAYOUT_FILE = "/canvas/layout.json";
+
+// 前向声明（实现在后面的 namespace 块中）
+static void SaveCanvasLayout();
+static void LoadCanvasLayout();
 
 namespace {
 
@@ -48,6 +59,76 @@ std::string BuildRecipeDisplayText(const std::string& mode,
     display_text += extra_ingredients.empty() ? "无" : extra_ingredients;
 
     return display_text;
+}
+
+// 将逗号分隔的食材字符串拆成列表（去空格、去空项）
+std::vector<std::string> SplitIngredients(const std::string& input) {
+    std::vector<std::string> result;
+    std::string current;
+    for (size_t i = 0; i < input.size(); ++i) {
+        char ch = input[i];
+        if (ch == ',') {
+            size_t start = current.find_first_not_of(" \t");
+            size_t end = current.find_last_not_of(" \t");
+            if (start != std::string::npos && end != std::string::npos) {
+                result.push_back(current.substr(start, end - start + 1));
+            }
+            current.clear();
+        } else if (ch == (char)0xE3 && i + 1 < input.size() && input[i+1] == (char)0x80 && i + 2 < input.size() && input[i+2] == (char)0x81) {
+            // UTF-8 中文逗号 ，= 0xE3 0x80 0x81
+            size_t start = current.find_first_not_of(" \t");
+            size_t end = current.find_last_not_of(" \t");
+            if (start != std::string::npos && end != std::string::npos) {
+                result.push_back(current.substr(start, end - start + 1));
+            }
+            current.clear();
+            i += 2;  // 跳过剩余两个字节
+        } else {
+            current += ch;
+        }
+    }
+    size_t start = current.find_first_not_of(" \t");
+    size_t end = current.find_last_not_of(" \t");
+    if (start != std::string::npos && end != std::string::npos) {
+        result.push_back(current.substr(start, end - start + 1));
+    }
+    return result;
+}
+
+// 检查某食材名是否在冰箱库存中（子串匹配，忽略大小写）
+bool IsIngredientInFridge(const std::string& ingredient, const std::vector<FridgeItem>& fridge_items) {
+    // 将 ingredient 转小写
+    std::string ing_lower = ingredient;
+    for (auto& c : ing_lower) {
+        if (c >= 'A' && c <= 'Z') c += 32;
+    }
+    for (const auto& item : fridge_items) {
+        // 将 item.name 转小写
+        std::string name_lower = item.name;
+        for (auto& c : name_lower) {
+            if (c >= 'A' && c <= 'Z') c += 32;
+        }
+        // 双向子串匹配：冰箱有"鸡蛋"，需要"鸡蛋"；或冰箱有"牛肉片"，需要"牛肉"
+        if (name_lower.find(ing_lower) != std::string::npos ||
+            ing_lower.find(name_lower) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// 对比 required_ingredients 和冰箱库存，返回缺失食材（逗号分隔）
+std::string ComputeMissingIngredients(const std::string& required_ingredients,
+                                      const std::vector<FridgeItem>& fridge_items) {
+    auto required = SplitIngredients(required_ingredients);
+    std::string missing;
+    for (const auto& ing : required) {
+        if (!IsIngredientInFridge(ing, fridge_items)) {
+            if (!missing.empty()) missing += "、";
+            missing += ing;
+        }
+    }
+    return missing;
 }
 
 std::string BuildInventorySnapshotJson(const std::vector<FridgeItem>& items) {
@@ -195,12 +276,12 @@ void FridgeMcpTools::Initialize() {
     
     // 工具 9: 冰箱显示页面管理
     PropertyList page_props;
-    page_props.AddProperty(Property("target_page", kPropertyTypeInteger, 1, 5));
+    page_props.AddProperty(Property("target_page", kPropertyTypeInteger, 1, 15));
 
     mcp_server.AddTool("fridge.pagemanager",
-        "Switch the e-paper display page to show different fridge information. "
-        "1: CHAT_PAGE (Clock/Summary), 2: FRIDGE_STATS_PAGE (Statistics), 3: FOOD_LIST_PAGE (Item list), 4: RECIPE_PAGE (AI Recipes), 5: HOME_PIC_DISPLAY (Home Picture). "
-        "当需要查看冰箱统计、食材列表或AI菜谱时切换页面。",
+        "Switch the e-paper display page. Pages 1-5 are built-in (Chat/Stats/List/Recipe/HomePic). "
+        "Page 6 is the default canvas. Pages 7-15 are user-created custom pages. "
+        "当需要查看冰箱统计、食材列表、AI菜谱或自定义页面时切换页面。",
         page_props,
         [this](const PropertyList& properties) -> ReturnValue {
             return HandlePageManager(properties);
@@ -220,17 +301,269 @@ void FridgeMcpTools::Initialize() {
         "Recommend a recipe based on the current fridge inventory and display it on the e-paper recipe page. "
         "(基于当前冰箱库存推荐食谱，并显示到墨水屏食谱页)\n"
         "You must first determine the recommendation mode from the user's conversation before calling this tool:\n"
-        "1. `fridge_only`: only use ingredients already in the fridge.\n"
-        "2. `mixed_purchase`: use some fridge ingredients and buy some extra ingredients.\n"
-        "Fill the recipe in this normalized format: recommendation mode, dish name, brief recommendation reason, required ingredients, "
-        "extra ingredients to buy when needed, and cooking time. "
+        "1. `fridge_only`: only use ingredients already in the fridge. The device will check the fridge and "
+        "REJECT the call if any required ingredient is missing, telling you what to buy.\n"
+        "2. `mixed_purchase`: use some fridge ingredients and buy some extra ingredients. The device will "
+        "auto-detect missing ingredients and fill them into extra_ingredients for you.\n"
+        "Fill the recipe in this normalized format: recommendation mode, dish name, brief recommendation reason, "
+        "required ingredients, extra ingredients to buy when needed, and cooking time. "
         "The device will return the current fridge inventory snapshot together with the rendered recipe result.",
         recipe_props,
         [this](const PropertyList& properties) -> ReturnValue {
             return HandleRecipeRecommend(properties);
         });
     
-    ESP_LOGI(TAG, "FridgeMcpTools initialized with 10 tools");
+    // ==================== Canvas 工具 (page 6) ====================
+
+    // 工具 11: canvas.add_text — 在画布页放置文本
+    PropertyList canvas_text_props;
+    canvas_text_props.AddProperty(Property("id", kPropertyTypeString));
+    canvas_text_props.AddProperty(Property("text", kPropertyTypeString));
+    canvas_text_props.AddProperty(Property("x", kPropertyTypeInteger));
+    canvas_text_props.AddProperty(Property("y", kPropertyTypeInteger));
+    canvas_text_props.AddProperty(Property("font_size", kPropertyTypeInteger, 16));
+    canvas_text_props.AddProperty(Property("align", kPropertyTypeString, std::string("left")));
+    canvas_text_props.AddProperty(Property("max_width", kPropertyTypeInteger, 276));
+    canvas_text_props.AddProperty(Property("refresh", kPropertyTypeBoolean, false));
+
+    mcp_server.AddTool("fridge.canvas.add_text",
+        "Place a text element on the canvas page (page 6). Screen is 296x128 pixels. "
+        "font_size: 12 or 16 (supports Chinese). align: left|center|right. "
+        "Set refresh=true to immediately update the display, or batch multiple calls then call canvas.refresh.",
+        canvas_text_props,
+        [this](const PropertyList& properties) -> ReturnValue {
+            return HandleCanvasAddText(properties);
+        });
+
+    // 工具 12: canvas.add_rect — 放置矩形
+    PropertyList canvas_rect_props;
+    canvas_rect_props.AddProperty(Property("id", kPropertyTypeString));
+    canvas_rect_props.AddProperty(Property("x", kPropertyTypeInteger));
+    canvas_rect_props.AddProperty(Property("y", kPropertyTypeInteger));
+    canvas_rect_props.AddProperty(Property("w", kPropertyTypeInteger));
+    canvas_rect_props.AddProperty(Property("h", kPropertyTypeInteger));
+    canvas_rect_props.AddProperty(Property("filled", kPropertyTypeBoolean, false));
+    canvas_rect_props.AddProperty(Property("refresh", kPropertyTypeBoolean, false));
+
+    mcp_server.AddTool("fridge.canvas.add_rect",
+        "Place a rectangle on the canvas page. Use filled=true for solid, false for outline.",
+        canvas_rect_props,
+        [this](const PropertyList& properties) -> ReturnValue {
+            return HandleCanvasAddRect(properties);
+        });
+
+    // 工具 13: canvas.add_line — 放置线条
+    PropertyList canvas_line_props;
+    canvas_line_props.AddProperty(Property("id", kPropertyTypeString));
+    canvas_line_props.AddProperty(Property("x1", kPropertyTypeInteger));
+    canvas_line_props.AddProperty(Property("y1", kPropertyTypeInteger));
+    canvas_line_props.AddProperty(Property("x2", kPropertyTypeInteger));
+    canvas_line_props.AddProperty(Property("y2", kPropertyTypeInteger));
+    canvas_line_props.AddProperty(Property("width", kPropertyTypeInteger, 1));
+    canvas_line_props.AddProperty(Property("refresh", kPropertyTypeBoolean, false));
+
+    mcp_server.AddTool("fridge.canvas.add_line",
+        "Place a line on the canvas page from (x1,y1) to (x2,y2).",
+        canvas_line_props,
+        [this](const PropertyList& properties) -> ReturnValue {
+            return HandleCanvasAddLine(properties);
+        });
+
+    // 工具 15: canvas.clear — 清空画布（或删除单个元素）
+    PropertyList canvas_clear_props;
+    canvas_clear_props.AddProperty(Property("refresh", kPropertyTypeBoolean, true));
+    canvas_clear_props.AddProperty(Property("id", kPropertyTypeString, std::string("")));
+
+    mcp_server.AddTool("fridge.canvas.clear",
+        "Clear all elements from the canvas page. Default refresh=true. "
+        "Also supports removing a single element: pass id parameter to remove only that element.",
+        canvas_clear_props,
+        [this](const PropertyList& properties) -> ReturnValue {
+            // 如果传了 id 参数且非空，走 remove 逻辑；否则清空全部
+            bool has_id = false;
+            std::string id_val;
+            try {
+                id_val = properties["id"].value<std::string>();
+                if (!id_val.empty()) has_id = true;
+            } catch (...) {
+                has_id = false;
+            }
+            if (has_id) {
+                return HandleCanvasRemove(properties);
+            }
+            return HandleCanvasClear(properties);
+        });
+
+    // 工具 16: canvas.add_image — 从文件加载图片到画布
+    PropertyList canvas_image_props;
+    canvas_image_props.AddProperty(Property("id", kPropertyTypeString));
+    canvas_image_props.AddProperty(Property("name", kPropertyTypeString));
+    canvas_image_props.AddProperty(Property("x", kPropertyTypeInteger));
+    canvas_image_props.AddProperty(Property("y", kPropertyTypeInteger));
+    canvas_image_props.AddProperty(Property("w", kPropertyTypeInteger));
+    canvas_image_props.AddProperty(Property("h", kPropertyTypeInteger));
+    canvas_image_props.AddProperty(Property("refresh", kPropertyTypeBoolean, false));
+
+    mcp_server.AddTool("fridge.canvas.add_image",
+        "Load a bitmap image from canvas storage (uploaded via POST /api/canvas_image?name=xxx) "
+        "and place it on the canvas page. The image must be a 1-bpp (black/white) raw bitmap "
+        "with the given width and height. Use the upload API first to transfer the file, "
+        "then call this tool to display it.",
+        canvas_image_props,
+        [this](const PropertyList& properties) -> ReturnValue {
+            return HandleCanvasAddImage(properties);
+        });
+
+    // ==================== 自定义页面工具 (page 7-15) ====================
+
+    // 工具 19: page.create — 创建自定义页面
+    PropertyList page_create_props;
+    page_create_props.AddProperty(Property("name", kPropertyTypeString));
+
+    mcp_server.AddTool("fridge.page.create",
+        "Create a custom e-paper page (page number 7-15). Returns the assigned page number. "
+        "Custom pages persist across reboots. Use fridge.page.element.add to place elements.",
+        page_create_props,
+        [this](const PropertyList& properties) -> ReturnValue {
+            return HandlePageCreate(properties);
+        });
+
+    // 工具 20: page.delete — 删除自定义页面
+    PropertyList page_delete_props;
+    page_delete_props.AddProperty(Property("page", kPropertyTypeInteger, 7, 15));
+
+    mcp_server.AddTool("fridge.page.delete",
+        "Delete a custom page and all its elements. Built-in pages (1-6) cannot be deleted.",
+        page_delete_props,
+        [this](const PropertyList& properties) -> ReturnValue {
+            return HandlePageDelete(properties);
+        });
+
+    // 工具 21: page.list — 列出所有页面
+    mcp_server.AddTool("fridge.page.list",
+        "List all pages: built-in (1-6) and custom (7-15) with their names and element counts.",
+        PropertyList(),
+        [this](const PropertyList& properties) -> ReturnValue {
+            return HandlePageList(properties);
+        });
+
+    // 工具 22: page.rename — 重命名自定义页面
+    PropertyList page_rename_props;
+    page_rename_props.AddProperty(Property("page", kPropertyTypeInteger, 7, 15));
+    page_rename_props.AddProperty(Property("name", kPropertyTypeString));
+
+    mcp_server.AddTool("fridge.page.rename",
+        "Rename a custom page. Only applies to custom pages (7-15).",
+        page_rename_props,
+        [this](const PropertyList& properties) -> ReturnValue {
+            return HandlePageRename(properties);
+        });
+
+    // 工具 23: page.element.add — 在指定页面添加元素
+    PropertyList elem_add_props;
+    elem_add_props.AddProperty(Property("page", kPropertyTypeInteger, 7, 15));
+    elem_add_props.AddProperty(Property("id", kPropertyTypeString));
+    elem_add_props.AddProperty(Property("type", kPropertyTypeString,
+        std::string("text|rect|line")));
+    elem_add_props.AddProperty(Property("x", kPropertyTypeInteger, 0, 295));
+    elem_add_props.AddProperty(Property("y", kPropertyTypeInteger, 0, 127));
+    elem_add_props.AddProperty(Property("text", kPropertyTypeString, std::string("")));
+    elem_add_props.AddProperty(Property("font_size", kPropertyTypeInteger, 16));
+    elem_add_props.AddProperty(Property("align", kPropertyTypeString, std::string("left")));
+    elem_add_props.AddProperty(Property("w", kPropertyTypeInteger, 40));
+    elem_add_props.AddProperty(Property("h", kPropertyTypeInteger, 30));
+    elem_add_props.AddProperty(Property("filled", kPropertyTypeBoolean, false));
+    elem_add_props.AddProperty(Property("x1", kPropertyTypeInteger, 0));
+    elem_add_props.AddProperty(Property("y1", kPropertyTypeInteger, 0));
+    elem_add_props.AddProperty(Property("x2", kPropertyTypeInteger, 0));
+    elem_add_props.AddProperty(Property("y2", kPropertyTypeInteger, 0));
+    elem_add_props.AddProperty(Property("width", kPropertyTypeInteger, 1));
+    elem_add_props.AddProperty(Property("max_width", kPropertyTypeInteger, 276));
+    elem_add_props.AddProperty(Property("dynamic", kPropertyTypeBoolean, false));
+    elem_add_props.AddProperty(Property("dynamic_type", kPropertyTypeString, std::string("")));
+    elem_add_props.AddProperty(Property("refresh", kPropertyTypeBoolean, false));
+
+    mcp_server.AddTool("fridge.page.element.add",
+        "Add an element to a custom page (7-15). type: text/rect/line. "
+        "Set dynamic=true for elements whose text will be updated via element.update "
+        "(e.g. clock, fan count, weather). Screen is 296x128. "
+        "text params: text,font_size,align,max_width. rect params: w,h,filled. "
+        "line params: x1,y1,x2,y2,width. Set refresh=true to immediately update display. "
+        "dynamic_type (optional, for text only): device-side auto-updating value. "
+        "Supported: clock(HH:MM), date(YYYY-MM-DD 周X), datetime(MM-DD HH:MM), "
+        "cpu_temp(XX.X°C), heap(Heap: XXKB), uptime(Up: Xd Xh Xm). "
+        "When dynamic_type is set, the text param is ignored and the device updates "
+        "the value automatically every second.",
+        elem_add_props,
+        [this](const PropertyList& properties) -> ReturnValue {
+            return HandleElementAdd(properties);
+        });
+
+    // 工具 24: page.element.update — 更新动态元素文本（核心）
+    PropertyList elem_update_props;
+    elem_update_props.AddProperty(Property("page", kPropertyTypeInteger, 7, 15));
+    elem_update_props.AddProperty(Property("id", kPropertyTypeString));
+    elem_update_props.AddProperty(Property("text", kPropertyTypeString));
+    elem_update_props.AddProperty(Property("refresh", kPropertyTypeBoolean, true));
+
+    mcp_server.AddTool("fridge.page.element.update",
+        "Update the text of a dynamic element on a custom page. "
+        "This is the core mechanism for Hermes to push dynamic data "
+        "(fan counts, weather, countdowns, stock prices, etc.) to the e-paper display. "
+        "Call this from a scheduled cron job to keep the display updated. "
+        "Set refresh=true (default) to immediately refresh the screen.",
+        elem_update_props,
+        [this](const PropertyList& properties) -> ReturnValue {
+            return HandleElementUpdate(properties);
+        });
+
+    // 工具 25: page.element.remove — 删除元素
+    PropertyList elem_remove_props;
+    elem_remove_props.AddProperty(Property("page", kPropertyTypeInteger, 7, 15));
+    elem_remove_props.AddProperty(Property("id", kPropertyTypeString));
+    elem_remove_props.AddProperty(Property("refresh", kPropertyTypeBoolean, false));
+
+    mcp_server.AddTool("fridge.page.element.remove",
+        "Remove an element from a custom page by id.",
+        elem_remove_props,
+        [this](const PropertyList& properties) -> ReturnValue {
+            return HandleElementRemove(properties);
+        });
+
+    // 工具 26: page.element.list — 列出页面所有元素
+    PropertyList elem_list_props;
+    elem_list_props.AddProperty(Property("page", kPropertyTypeInteger, 7, 15));
+
+    mcp_server.AddTool("fridge.page.element.list",
+        "List all elements on a custom page with their properties.",
+        elem_list_props,
+        [this](const PropertyList& properties) -> ReturnValue {
+            return HandleElementList(properties);
+        });
+
+    // 工具 27: page.clear — 清空自定义页面
+    PropertyList page_clear_props;
+    page_clear_props.AddProperty(Property("page", kPropertyTypeInteger, 7, 15));
+    page_clear_props.AddProperty(Property("refresh", kPropertyTypeBoolean, true));
+
+    mcp_server.AddTool("fridge.page.clear",
+        "Clear all elements from a custom page. The page itself is not deleted.",
+        page_clear_props,
+        [this](const PropertyList& properties) -> ReturnValue {
+            return HandlePageClear(properties);
+        });
+
+    ESP_LOGI(TAG, "FridgeMcpTools initialized with 24 tools (10 fridge + 5 canvas + 9 custom page)");
+    // 注意：LoadCanvasLayout() 不在这里调用，因为 LittleFS 还没挂载
+    // 由 LocalControl::MountCanvasStorage() 挂载后调用 LoadCanvasLayout()
+    // 自定义页面也由 RestoreCanvasLayout() 一并恢复
+}
+
+// 在 LittleFS 挂载后恢复 canvas 布局
+void FridgeMcpTools::RestoreCanvasLayout() {
+    LoadCanvasLayout();
+    // 恢复自定义页面布局
+    CustomPageManager::GetInstance().LoadAllPages();
 }
 
 ReturnValue FridgeMcpTools::HandleGetItem(const PropertyList& properties) {
@@ -643,8 +976,8 @@ ReturnValue FridgeMcpTools::HandleItemUpdate(const PropertyList& properties) {
 ReturnValue FridgeMcpTools::HandlePageManager(const PropertyList& properties) {
     try {
         int page = properties["target_page"].value<int>();
-        if (page < 1 || page > 5) {
-            return ReturnValue("Invalid page index. Must be between 1 and 5.");
+        if (page < 1 || page > 15) {
+            return ReturnValue("Invalid page index. Must be between 1 and 15.");
         }
         
         auto* epaper = Board::GetInstance().GetEpaperDisplay();
@@ -692,22 +1025,62 @@ ReturnValue FridgeMcpTools::HandleRecipeRecommend(const PropertyList& properties
             return std::string("required_ingredients cannot be empty.");
         }
 
-        if (recommendation_mode == "mixed_purchase" && extra_ingredients.empty()) {
-            return std::string("extra_ingredients cannot be empty when recommendation_mode is `mixed_purchase`.");
-        }
-
         auto* epaper = Board::GetInstance().GetEpaperDisplay();
         if (epaper == nullptr) {
             return ReturnValue("E-paper display not found on this board.");
         }
 
         auto inventory_items = FridgeManager::GetInstance().GetAllItems();
+
+        // 自动比对冰箱库存，计算缺失食材
+        std::string missing_ingredients = ComputeMissingIngredients(required_ingredients, inventory_items);
+
+        // fridge_only 模式：所有食材必须在冰箱里，否则报错提示需要采购
+        if (recommendation_mode == "fridge_only" && !missing_ingredients.empty()) {
+            return std::string("fridge_only mode requires all ingredients to be in the fridge. "
+                "Missing: " + missing_ingredients +
+                ". Either add them to the fridge first, or use mixed_purchase mode.");
+        }
+
+        // 自动填充 extra_ingredients：如果调用方未指定，且有缺失食材，则自动填入
+        std::string effective_extra_ingredients = extra_ingredients;
+        if (!missing_ingredients.empty()) {
+            if (effective_extra_ingredients.empty()) {
+                // 调用方未指定采购列表，自动填入缺失食材
+                effective_extra_ingredients = missing_ingredients;
+            } else {
+                // 调用方指定了采购列表，但也可能不全，合并缺失项
+                auto extra_list = SplitIngredients(effective_extra_ingredients);
+                for (const auto& ing : SplitIngredients(missing_ingredients)) {
+                    bool found = false;
+                    for (const auto& ex : extra_list) {
+                        std::string ing_lower = ing, ex_lower = ex;
+                        for (auto& c : ing_lower) if (c >= 'A' && c <= 'Z') c += 32;
+                        for (auto& c : ex_lower) if (c >= 'A' && c <= 'Z') c += 32;
+                        if (ex_lower.find(ing_lower) != std::string::npos ||
+                            ing_lower.find(ex_lower) != std::string::npos) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        if (!effective_extra_ingredients.empty()) effective_extra_ingredients += "、";
+                        effective_extra_ingredients += ing;
+                    }
+                }
+            }
+        }
+
+        if (recommendation_mode == "mixed_purchase" && effective_extra_ingredients.empty()) {
+            return std::string("extra_ingredients cannot be empty when recommendation_mode is `mixed_purchase`.");
+        }
+
         std::string recipe_text = BuildRecipeDisplayText(
             recommendation_mode,
             dish_name,
             summary,
             required_ingredients,
-            extra_ingredients,
+            effective_extra_ingredients,
             cooking_time
         );
 
@@ -723,7 +1096,8 @@ ReturnValue FridgeMcpTools::HandleRecipeRecommend(const PropertyList& properties
         result_json += ",\"dish_name\":\"" + EscapeJsonString(dish_name) + "\"";
         result_json += ",\"summary\":\"" + EscapeJsonString(summary) + "\"";
         result_json += ",\"required_ingredients\":\"" + EscapeJsonString(required_ingredients) + "\"";
-        result_json += ",\"extra_ingredients\":\"" + EscapeJsonString(extra_ingredients) + "\"";
+        result_json += ",\"extra_ingredients\":\"" + EscapeJsonString(effective_extra_ingredients) + "\"";
+        result_json += ",\"missing_ingredients\":\"" + EscapeJsonString(missing_ingredients) + "\"";
         result_json += ",\"cooking_time\":\"" + EscapeJsonString(cooking_time) + "\"";
         result_json += ",\"recipe_text\":\"" + EscapeJsonString(recipe_text) + "\"";
         result_json += ",\"current_fridge_items\":" + BuildInventorySnapshotJson(inventory_items);
@@ -733,6 +1107,948 @@ ReturnValue FridgeMcpTools::HandleRecipeRecommend(const PropertyList& properties
         return result_json;
     } catch (const std::exception& e) {
         ESP_LOGE(TAG, "Error in recipe recommend: %s", e.what());
+        return std::string("Error: ") + e.what();
+    }
+}
+
+// ==================== Canvas 工具实现 ====================
+
+// canvas 前缀，用于标识动态添加的画布控件
+static const char* CANVAS_PREFIX = "canvas_";
+
+// font_size → u8g2 字体指针映射
+static const uint8_t* GetCanvasFont(int font_size) {
+    if (font_size <= 12) {
+        return u8g2_font_wqy12_t_gb2312;
+    }
+    return u8g2_font_wqy16_t_gb2312;
+}
+
+// align 字符串 → EpaperTextAlign 枚举
+static EpaperTextAlign ParseAlign(const std::string& align) {
+    if (align == "center") return EpaperTextAlign::CENTER;
+    if (align == "right") return EpaperTextAlign::RIGHT;
+    return EpaperTextAlign::LEFT;
+}
+
+// 统一的刷新辅助：如果 refresh=true 则刷新画布页
+static void RefreshCanvasIfNeeded(bool refresh) {
+    if (!refresh) return;
+    auto* epaper = Board::GetInstance().GetEpaperDisplay();
+    if (epaper) {
+        epaper->ShowCanvasPage();
+    }
+}
+
+// 构造带 canvas_ 前缀的完整 id
+static std::string MakeCanvasId(const std::string& id) {
+    return std::string(CANVAS_PREFIX) + id;
+}
+
+// Canvas 控件数量上限
+static const int CANVAS_MAX_LABELS = 30;
+
+// 统计当前 canvas_ 前缀的 label 数量
+static int CountCanvasLabels() {
+    auto* epaper = Board::GetInstance().GetEpaperDisplay();
+    if (epaper == nullptr) return 0;
+    auto* labels = epaper->GetAllLabels();
+    if (labels == nullptr) return 0;
+    int count = 0;
+    for (const auto& pair : *labels) {
+        if (strncmp(pair.first.c_str(), CANVAS_PREFIX, 7) == 0) {
+            count++;
+        }
+    }
+    return count;
+}
+
+// 检查控件数量是否超限（用于 add 操作前检查）
+// 如果 label_id 已存在则允许替换（不增加数量）
+// 返回 true 表示允许操作，false 表示超限
+static bool CheckCanvasLabelLimit(const std::string& full_id) {
+    auto* epaper = Board::GetInstance().GetEpaperDisplay();
+    if (epaper == nullptr) return true;  // 没有屏幕就不管了
+    // 如果同 ID 已存在，是替换操作，不增加数量
+    if (epaper->GetLabel(String(full_id.c_str())) != nullptr) {
+        return true;
+    }
+    // 新增操作，检查上限
+    int count = CountCanvasLabels();
+    if (count >= CANVAS_MAX_LABELS) {
+        return false;
+    }
+    return true;
+}
+
+// ==================== Canvas 布局持久化 ====================
+//
+// 布局文件格式 (layout.json):
+// [
+//   {"type":"text","id":"title","text":"...","x":10,"y":5,"font_size":16,"align":"center","max_width":276},
+//   {"type":"line","id":"div","x1":10,"y1":28,"x2":286,"y2":28,"width":2},
+//   {"type":"rect","id":"box","x":8,"y":33,"w":280,"h":60,"filled":false},
+//   {"type":"image","id":"heart","name":"heart","x":116,"y":30,"w":64,"h":64}
+// ]
+
+// 保存当前 canvas 布局到 LittleFS
+static void SaveCanvasLayout() {
+    auto* epaper = Board::GetInstance().GetEpaperDisplay();
+    if (epaper == nullptr) return;
+
+    // 如果没有 canvas 控件，删除布局文件而不是写空数组
+    int count = CountCanvasLabels();
+    if (count == 0) {
+        unlink(CANVAS_LAYOUT_FILE);
+        ESP_LOGI(TAG, "No canvas labels, layout file deleted");
+        return;
+    }
+
+    FILE* f = fopen(CANVAS_LAYOUT_FILE, "w");
+    if (!f) {
+        ESP_LOGW(TAG, "Failed to open layout file for writing");
+        return;
+    }
+
+    fputc('[', f);
+    bool first = true;
+
+    // 遍历所有 canvas_ 前缀的 label
+    auto* labels = epaper->GetAllLabels();
+    if (labels) {
+        for (const auto& pair : *labels) {
+            const String& label_id = pair.first;
+            EpaperLabel* label = pair.second;
+
+            // 只保存 canvas_ 前缀的
+            if (strncmp(label_id.c_str(), CANVAS_PREFIX, 7) != 0) continue;
+            // 跳过 layout.json 自身
+            if (label->page != 6) continue;
+
+            // 提取不含前缀的 id
+            std::string short_id = label_id.c_str() + 7;
+
+            if (!first) fputc(',', f);
+            first = false;
+
+            switch (label->type) {
+                case EpaperObjectType::TEXT:
+                    fprintf(f, "{\"type\":\"text\",\"id\":\"%s\",\"text\":\"%s\",\"x\":%d,\"y\":%d,\"font_size\":%d,\"align\":\"%s\",\"max_width\":%d}",
+                            short_id.c_str(),
+                            EscapeJsonString(label->text().c_str()).c_str(),
+                            (int)label->x, (int)(label->y - label->h + 4),  // 反算原始 y
+                            (int)label->h - 4,  // 反算 font_size
+                            label->align == EpaperTextAlign::CENTER ? "center" :
+                            label->align == EpaperTextAlign::RIGHT ? "right" : "left",
+                            (int)label->w_max);
+                    break;
+                case EpaperObjectType::RECT:
+                    fprintf(f, "{\"type\":\"rect\",\"id\":\"%s\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"filled\":%s}",
+                            short_id.c_str(),
+                            (int)label->x, (int)label->y, (int)label->w, (int)label->h,
+                            label->filled ? "true" : "false");
+                    break;
+                case EpaperObjectType::LINE:
+                    fprintf(f, "{\"type\":\"line\",\"id\":\"%s\",\"x1\":%d,\"y1\":%d,\"x2\":%d,\"y2\":%d,\"width\":%d}",
+                            short_id.c_str(),
+                            (int)label->x, (int)label->y, (int)label->x1, (int)label->y1,
+                            (int)label->width);
+                    break;
+                case EpaperObjectType::BITMAP:
+                    // 保存图片信息：name, x, y, w, h
+                    if (label->image_name[0] != '\0') {
+                        fprintf(f, "{\"type\":\"image\",\"id\":\"%s\",\"name\":\"%s\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d}",
+                                short_id.c_str(),
+                                label->image_name,
+                                (int)label->x, (int)label->y, (int)label->w, (int)label->h);
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+
+    fputc(']', f);
+    fclose(f);
+    ESP_LOGI(TAG, "Canvas layout saved to %s", CANVAS_LAYOUT_FILE);
+}
+
+// 从 LittleFS 恢复 canvas 布局
+static void LoadCanvasLayout() {
+    FILE* f = fopen(CANVAS_LAYOUT_FILE, "r");
+    if (!f) {
+        ESP_LOGI(TAG, "No saved canvas layout found");
+        return;
+    }
+
+    // 读取整个文件
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    if (file_size <= 0 || file_size > 16384) {
+        fclose(f);
+        ESP_LOGW(TAG, "Invalid layout file size: %ld", file_size);
+        return;
+    }
+    fseek(f, 0, SEEK_SET);
+
+    char* buf = (char*)malloc(file_size + 1);
+    if (!buf) {
+        fclose(f);
+        return;
+    }
+    size_t rd = fread(buf, 1, file_size, f);
+    buf[rd] = '\0';
+    fclose(f);
+
+    // 简单解析 JSON 数组，逐个恢复控件
+    // 格式: [{"type":"text","id":"title",...},{...},...]
+    auto* epaper = Board::GetInstance().GetEpaperDisplay();
+    if (!epaper) {
+        free(buf);
+        return;
+    }
+
+    // 清理旧 canvas labels
+    epaper->ClearCanvasLabels();
+
+    const char* p = buf;
+    int count = 0;
+
+    while (*p) {
+        // 跳过空白和到 {
+        while (*p && *p != '{') p++;
+        if (!*p) break;
+        const char* obj_start = p;
+
+        // 找到对应的 }
+        int depth = 0;
+        while (*p) {
+            if (*p == '{') depth++;
+            if (*p == '}') depth--;
+            p++;
+            if (depth == 0) break;
+        }
+
+        // 从 obj_start 到 p 是一个完整的 JSON 对象
+        std::string obj_str(obj_start, p - obj_start);
+
+        // 解析字段
+        std::string type = "", id = "", text = "", align = "left";
+        int x = 0, y = 0, w = 0, h = 0, font_size = 16, max_width = 276;
+        int x1 = 0, y1_ = 0, x2 = 0, y2 = 0, width = 1;
+        bool filled = false;
+
+        // 提取 type
+        size_t pos = obj_str.find("\"type\":\"");
+        if (pos != std::string::npos) {
+            size_t start = pos + 8;
+            size_t end = obj_str.find("\"", start);
+            type = obj_str.substr(start, end - start);
+        }
+        // 提取 id
+        pos = obj_str.find("\"id\":\"");
+        if (pos != std::string::npos) {
+            size_t start = pos + 6;
+            size_t end = obj_str.find("\"", start);
+            id = obj_str.substr(start, end - start);
+        }
+        // 提取 text
+        pos = obj_str.find("\"text\":\"");
+        if (pos != std::string::npos) {
+            size_t start = pos + 8;
+            size_t end = obj_str.find("\"", start);
+            text = obj_str.substr(start, end - start);
+        }
+        // 提取 x
+        pos = obj_str.find("\"x\":");
+        if (pos != std::string::npos) x = atoi(obj_str.c_str() + pos + 4);
+        // 提取 y
+        pos = obj_str.find("\"y\":");
+        if (pos != std::string::npos) y = atoi(obj_str.c_str() + pos + 4);
+        // 提取 w
+        pos = obj_str.find("\"w\":");
+        if (pos != std::string::npos) w = atoi(obj_str.c_str() + pos + 4);
+        // 提取 h
+        pos = obj_str.find("\"h\":");
+        if (pos != std::string::npos) h = atoi(obj_str.c_str() + pos + 4);
+        // 提取 font_size ("font_size": 共12字符)
+        pos = obj_str.find("\"font_size\":");
+        if (pos != std::string::npos) font_size = atoi(obj_str.c_str() + pos + 12);
+        // 提取 align
+        pos = obj_str.find("\"align\":\"");
+        if (pos != std::string::npos) {
+            size_t start = pos + 9;
+            size_t end = obj_str.find("\"", start);
+            align = obj_str.substr(start, end - start);
+        }
+        // 提取 max_width ("max_width": 共12字符)
+        pos = obj_str.find("\"max_width\":");
+        if (pos != std::string::npos) max_width = atoi(obj_str.c_str() + pos + 12);
+        // 提取 filled
+        pos = obj_str.find("\"filled\":");
+        if (pos != std::string::npos) {
+            filled = (obj_str.substr(pos + 9, 4) == "true");
+        }
+        // 提取 x1,y1,x2,y2,width
+        pos = obj_str.find("\"x1\":");
+        if (pos != std::string::npos) x1 = atoi(obj_str.c_str() + pos + 5);
+        pos = obj_str.find("\"y1\":");
+        if (pos != std::string::npos) y1_ = atoi(obj_str.c_str() + pos + 5);
+        pos = obj_str.find("\"x2\":");
+        if (pos != std::string::npos) x2 = atoi(obj_str.c_str() + pos + 5);
+        pos = obj_str.find("\"y2\":");
+        if (pos != std::string::npos) y2 = atoi(obj_str.c_str() + pos + 5);
+
+        // 提取 name (图片文件名)
+        std::string img_name = "";
+        pos = obj_str.find("\"name\":\"");
+        if (pos != std::string::npos) {
+            size_t start = pos + 8;
+            size_t end = obj_str.find("\"", start);
+            img_name = obj_str.substr(start, end - start);
+        }
+
+        const uint8_t* font = GetCanvasFont(font_size);
+        EpaperTextAlign ealign = ParseAlign(align);
+        std::string full_id = MakeCanvasId(id);
+
+        if (type == "text" && !id.empty()) {
+            int text_h = font_size + 4;
+            epaper->AddLabel(String(full_id.c_str()), new EpaperLabel(
+                EpaperLabel::Text(text.c_str(), x, y, max_width, text_h, font_size,
+                                 font, GxEPD_BLACK, ealign, 1, true, false, 6)));
+            count++;
+        } else if (type == "rect" && !id.empty()) {
+            epaper->AddLabel(String(full_id.c_str()), new EpaperLabel(
+                EpaperLabel::Rect(x, y, w, h, filled, GxEPD_BLACK, 1, true, 6)));
+            count++;
+        } else if (type == "line" && !id.empty()) {
+            epaper->AddLabel(String(full_id.c_str()), new EpaperLabel(
+                EpaperLabel::Line(x1, y1_, x2, y2, width, GxEPD_BLACK, 1, true, 6)));
+            count++;
+        } else if (type == "image" && !id.empty() && !img_name.empty()) {
+            // 从 LittleFS 加载图片文件
+            std::string img_path = std::string("/canvas/") + img_name;
+            FILE* imgf = fopen(img_path.c_str(), "rb");
+            if (imgf) {
+                size_t total_bytes = w * h / 8;
+                uint8_t* bitmap = (uint8_t*)malloc(total_bytes);
+                if (bitmap) {
+                    size_t rd = fread(bitmap, 1, total_bytes, imgf);
+                    if (rd < total_bytes) {
+                        memset(bitmap + rd, 0, total_bytes - rd);
+                    }
+                    epaper->AddLabel(String(full_id.c_str()), new EpaperLabel(
+                        EpaperLabel::Bitmap(x, y, bitmap, w, h, 1, 1, false, false, false, true, 6, img_name.c_str())));
+                    count++;
+                    ESP_LOGI(TAG, "Restored image: %s (%dx%d)", img_name.c_str(), w, h);
+                }
+                fclose(imgf);
+            } else {
+                ESP_LOGW(TAG, "Image file not found during restore: %s", img_path.c_str());
+            }
+        }
+    }
+
+    free(buf);
+    ESP_LOGI(TAG, "Canvas layout restored: %d elements", count);
+}
+
+// ==================== 自定义页面工具实现 ====================
+
+ReturnValue FridgeMcpTools::HandlePageCreate(const PropertyList& properties) {
+    try {
+        std::string name = properties["name"].value<std::string>();
+        auto& cpm = CustomPageManager::GetInstance();
+        int page = cpm.CreatePage(name);
+        if (page < 0) {
+            return ReturnValue("Cannot create page: limit reached (max 9 custom pages).");
+        }
+        std::string result = "{\"status\":\"success\",\"page\":" + std::to_string(page) +
+            ",\"name\":\"" + name + "\"}";
+        ESP_LOGI(TAG, "[DEBUG] page.create result: %s", result.c_str());
+        return result;
+    } catch (const std::exception& e) {
+        ESP_LOGE(TAG, "Error in page.create: %s", e.what());
+        return std::string("Error: ") + e.what();
+    }
+}
+
+ReturnValue FridgeMcpTools::HandlePageDelete(const PropertyList& properties) {
+    try {
+        int page = properties["page"].value<int>();
+        auto& cpm = CustomPageManager::GetInstance();
+        if (!cpm.DeletePage(page)) {
+            return ReturnValue("Failed to delete page " + std::to_string(page) + ". Page may not exist or is built-in.");
+        }
+        // 如果当前显示的是被删除的页面，切回主页
+        auto* epaper = Board::GetInstance().GetEpaperDisplay();
+        if (epaper) {
+            epaper->SetPage(5);  // HOME_PIC_DISPLAY
+        }
+        std::string result = "{\"status\":\"success\",\"removed\":" + std::to_string(page) + "}";
+        ESP_LOGI(TAG, "[DEBUG] page.delete result: %s", result.c_str());
+        return result;
+    } catch (const std::exception& e) {
+        ESP_LOGE(TAG, "Error in page.delete: %s", e.what());
+        return std::string("Error: ") + e.what();
+    }
+}
+
+ReturnValue FridgeMcpTools::HandlePageList(const PropertyList& properties) {
+    try {
+        auto& cpm = CustomPageManager::GetInstance();
+        // 内置页面
+        std::string json = "[";
+        // 内置页面信息
+        const char* builtin_names[] = {"", "聊天", "冰箱统计", "食物列表", "菜谱", "主页图片", "默认画布"};
+        for (int i = 1; i <= 6; i++) {
+            if (i > 1) json += ",";
+            json += "{\"page\":" + std::to_string(i);
+            json += ",\"name\":\"" + std::string(builtin_names[i]) + "\"";
+            json += ",\"builtin\":true}";
+        }
+        // 自定义页面
+        auto& pages = cpm.GetPages();
+        for (const auto& pi : pages) {
+            json += ",{\"page\":" + std::to_string(pi.page);
+            json += ",\"name\":\"" + pi.name + "\"";
+            json += ",\"builtin\":false}";
+        }
+        json += "]";
+        ESP_LOGI(TAG, "[DEBUG] page.list result: %s", json.c_str());
+        return json;
+    } catch (const std::exception& e) {
+        ESP_LOGE(TAG, "Error in page.list: %s", e.what());
+        return std::string("Error: ") + e.what();
+    }
+}
+
+ReturnValue FridgeMcpTools::HandlePageRename(const PropertyList& properties) {
+    try {
+        int page = properties["page"].value<int>();
+        std::string name = properties["name"].value<std::string>();
+        auto& cpm = CustomPageManager::GetInstance();
+        if (!cpm.RenamePage(page, name)) {
+            return ReturnValue("Failed to rename page " + std::to_string(page) + ". Page may not exist or is built-in.");
+        }
+        std::string result = "{\"status\":\"success\",\"page\":" + std::to_string(page) +
+            ",\"name\":\"" + name + "\"}";
+        ESP_LOGI(TAG, "[DEBUG] page.rename result: %s", result.c_str());
+        return result;
+    } catch (const std::exception& e) {
+        ESP_LOGE(TAG, "Error in page.rename: %s", e.what());
+        return std::string("Error: ") + e.what();
+    }
+}
+
+ReturnValue FridgeMcpTools::HandleElementAdd(const PropertyList& properties) {
+    try {
+        int page = properties["page"].value<int>();
+        std::string id = properties["id"].value<std::string>();
+        std::string type = properties["type"].value<std::string>();
+
+        // 通用参数
+        int x = properties["x"].value<int>();
+        int y = properties["y"].value<int>();
+
+        // text 参数
+        std::string text = "";
+        try { text = properties["text"].value<std::string>(); } catch (...) {}
+        int font_size = 16;
+        try { font_size = properties["font_size"].value<int>(); } catch (...) {}
+        std::string align = "left";
+        try { align = properties["align"].value<std::string>(); } catch (...) {}
+        int max_width = 276;
+        try { max_width = properties["max_width"].value<int>(); } catch (...) {}
+
+        // rect 参数
+        int w = 40;
+        try { w = properties["w"].value<int>(); } catch (...) {}
+        int h = 30;
+        try { h = properties["h"].value<int>(); } catch (...) {}
+        bool filled = false;
+        try { filled = properties["filled"].value<bool>(); } catch (...) {}
+
+        // line 参数
+        int x1 = 0, y1 = 0, x2 = 0, y2 = 0, width = 1;
+        try { x1 = properties["x1"].value<int>(); } catch (...) {}
+        try { y1 = properties["y1"].value<int>(); } catch (...) {}
+        try { x2 = properties["x2"].value<int>(); } catch (...) {}
+        try { y2 = properties["y2"].value<int>(); } catch (...) {}
+        try { width = properties["width"].value<int>(); } catch (...) {}
+
+        bool dynamic = false;
+        try { dynamic = properties["dynamic"].value<bool>(); } catch (...) {}
+        std::string dynamic_type;
+        try { dynamic_type = properties["dynamic_type"].value<std::string>(); } catch (...) {}
+        bool refresh = false;
+        try { refresh = properties["refresh"].value<bool>(); } catch (...) {}
+
+        (void)max_width;  // max_width 在 CustomPageManager::AddElement 内部固定为 276
+        (void)dynamic;    // dynamic 标志暂不使用，由 dynamic_type 决定是否为动态元素
+
+        auto& cpm = CustomPageManager::GetInstance();
+        if (!cpm.AddElement(page, id, type, text, x, y,
+                           font_size, align, w, h, filled,
+                           x1, y1, x2, y2, width,
+                           "",  // image_name（暂不支持通过此工具添加图片）
+                           dynamic, dynamic_type, "", 0)) {
+            return ReturnValue("Failed to add element to page " + std::to_string(page) +
+                ". Page may not exist or element limit (30) reached.");
+        }
+
+        // 如果 refresh=true 且当前页是目标页，刷新显示
+        if (refresh) {
+            auto* epaper = Board::GetInstance().GetEpaperDisplay();
+            if (epaper) {
+                epaper->SetPage(page);
+            }
+        }
+
+        std::string result = "{\"status\":\"success\",\"page\":" + std::to_string(page) +
+            ",\"id\":\"" + id + "\",\"type\":\"" + type + "\"}";
+        ESP_LOGI(TAG, "[DEBUG] page.element.add result: %s", result.c_str());
+        return result;
+    } catch (const std::exception& e) {
+        ESP_LOGE(TAG, "Error in page.element.add: %s", e.what());
+        return std::string("Error: ") + e.what();
+    }
+}
+
+ReturnValue FridgeMcpTools::HandleElementUpdate(const PropertyList& properties) {
+    try {
+        int page = properties["page"].value<int>();
+        std::string id = properties["id"].value<std::string>();
+        std::string text = properties["text"].value<std::string>();
+        bool refresh = true;
+        try { refresh = properties["refresh"].value<bool>(); } catch (...) {}
+
+        auto& cpm = CustomPageManager::GetInstance();
+        if (!cpm.UpdateElementText(page, id, text)) {
+            return ReturnValue("Element '" + id + "' not found on page " + std::to_string(page) + ".");
+        }
+
+        if (refresh) {
+            auto* epaper = Board::GetInstance().GetEpaperDisplay();
+            if (epaper) {
+                // 只刷新当前页（避免不必要的全屏刷新）
+                // SetPage 内部会比较，如果已在目标页则不刷新
+                // 这里直接调 SetPage 触发 UpdateUI
+                epaper->SetPage(page);
+            }
+        }
+
+        std::string result = "{\"status\":\"success\",\"page\":" + std::to_string(page) +
+            ",\"id\":\"" + id + "\",\"text\":\"" + text + "\"}";
+        ESP_LOGI(TAG, "[DEBUG] page.element.update result: %s", result.c_str());
+        return result;
+    } catch (const std::exception& e) {
+        ESP_LOGE(TAG, "Error in page.element.update: %s", e.what());
+        return std::string("Error: ") + e.what();
+    }
+}
+
+ReturnValue FridgeMcpTools::HandleElementRemove(const PropertyList& properties) {
+    try {
+        int page = properties["page"].value<int>();
+        std::string id = properties["id"].value<std::string>();
+        bool refresh = false;
+        try { refresh = properties["refresh"].value<bool>(); } catch (...) {}
+
+        auto& cpm = CustomPageManager::GetInstance();
+        if (!cpm.RemoveElement(page, id)) {
+            return ReturnValue("Element '" + id + "' not found on page " + std::to_string(page) + ".");
+        }
+
+        if (refresh) {
+            auto* epaper = Board::GetInstance().GetEpaperDisplay();
+            if (epaper) {
+                epaper->SetPage(page);
+            }
+        }
+
+        std::string result = "{\"status\":\"success\",\"removed\":\"" + id +
+            "\",\"page\":" + std::to_string(page) + "}";
+        ESP_LOGI(TAG, "[DEBUG] page.element.remove result: %s", result.c_str());
+        return result;
+    } catch (const std::exception& e) {
+        ESP_LOGE(TAG, "Error in page.element.remove: %s", e.what());
+        return std::string("Error: ") + e.what();
+    }
+}
+
+ReturnValue FridgeMcpTools::HandleElementList(const PropertyList& properties) {
+    try {
+        int page = properties["page"].value<int>();
+        auto& cpm = CustomPageManager::GetInstance();
+        std::string result = cpm.ListElements(page);
+        ESP_LOGI(TAG, "[DEBUG] page.element.list result: %s", result.c_str());
+        return result;
+    } catch (const std::exception& e) {
+        ESP_LOGE(TAG, "Error in page.element.list: %s", e.what());
+        return std::string("Error: ") + e.what();
+    }
+}
+
+ReturnValue FridgeMcpTools::HandlePageClear(const PropertyList& properties) {
+    try {
+        int page = properties["page"].value<int>();
+        bool refresh = true;
+        try { refresh = properties["refresh"].value<bool>(); } catch (...) {}
+
+        auto& cpm = CustomPageManager::GetInstance();
+        if (!cpm.ClearPage(page)) {
+            return ReturnValue("Failed to clear page " + std::to_string(page) + ".");
+        }
+
+        if (refresh) {
+            auto* epaper = Board::GetInstance().GetEpaperDisplay();
+            if (epaper) {
+                epaper->SetPage(page);
+            }
+        }
+
+        std::string result = "{\"status\":\"success\",\"page\":" + std::to_string(page) + "}";
+        ESP_LOGI(TAG, "[DEBUG] page.clear result: %s", result.c_str());
+        return result;
+    } catch (const std::exception& e) {
+        ESP_LOGE(TAG, "Error in page.clear: %s", e.what());
+        return std::string("Error: ") + e.what();
+    }
+}
+
+ReturnValue FridgeMcpTools::HandleCanvasAddText(const PropertyList& properties) {
+    try {
+        std::string id = properties["id"].value<std::string>();
+        std::string text = properties["text"].value<std::string>();
+        int x = properties["x"].value<int>();
+        int y = properties["y"].value<int>();
+        int font_size = 16;
+        try { font_size = properties["font_size"].value<int>(); } catch (...) {}
+        std::string align_str = "left";
+        try { align_str = properties["align"].value<std::string>(); } catch (...) {}
+        int max_width = 276;
+        try { max_width = properties["max_width"].value<int>(); } catch (...) {}
+        bool refresh = false;
+        try { refresh = properties["refresh"].value<bool>(); } catch (...) {}
+
+        auto* epaper = Board::GetInstance().GetEpaperDisplay();
+        if (epaper == nullptr) {
+            return ReturnValue("E-paper display not found on this board.");
+        }
+
+        const uint8_t* font = GetCanvasFont(font_size);
+        EpaperTextAlign align = ParseAlign(align_str);
+        std::string full_id = MakeCanvasId(id);
+
+        // 检查控件数量上限
+        if (!CheckCanvasLabelLimit(full_id)) {
+            return ReturnValue("Canvas label limit reached (30). Call fridge.canvas.clear first.");
+        }
+
+        // font_height = font_size (12 或 16)
+        int h = font_size + 4;  // 给点余量
+
+        epaper->AddLabel(String(full_id.c_str()), new EpaperLabel(
+            EpaperLabel::Text(text.c_str(), x, y, max_width, h, font_size,
+                             font, GxEPD_BLACK, align, 1, true, false, 6)));
+
+        SaveCanvasLayout();
+        RefreshCanvasIfNeeded(refresh);
+
+        std::string result = "{\"status\":\"success\",\"id\":\"" + EscapeJsonString(id) +
+            "\",\"full_id\":\"" + EscapeJsonString(full_id) +
+            "\",\"type\":\"text\",\"page\":6}";
+        return result;
+    } catch (const std::exception& e) {
+        ESP_LOGE(TAG, "Error in canvas.add_text: %s", e.what());
+        return std::string("Error: ") + e.what();
+    }
+}
+
+ReturnValue FridgeMcpTools::HandleCanvasAddRect(const PropertyList& properties) {
+    try {
+        std::string id = properties["id"].value<std::string>();
+        int x = properties["x"].value<int>();
+        int y = properties["y"].value<int>();
+        int w = properties["w"].value<int>();
+        int h = properties["h"].value<int>();
+        bool filled = false;
+        try { filled = properties["filled"].value<bool>(); } catch (...) {}
+        bool refresh = false;
+        try { refresh = properties["refresh"].value<bool>(); } catch (...) {}
+
+        auto* epaper = Board::GetInstance().GetEpaperDisplay();
+        if (epaper == nullptr) {
+            return ReturnValue("E-paper display not found on this board.");
+        }
+
+        std::string full_id = MakeCanvasId(id);
+
+        if (!CheckCanvasLabelLimit(full_id)) {
+            return ReturnValue("Canvas label limit reached (30). Call fridge.canvas.clear first.");
+        }
+
+        epaper->AddLabel(String(full_id.c_str()), new EpaperLabel(
+            EpaperLabel::Rect(x, y, w, h, filled, GxEPD_BLACK, 1, true, 6)));
+
+        SaveCanvasLayout();
+        RefreshCanvasIfNeeded(refresh);
+
+        std::string result = "{\"status\":\"success\",\"id\":\"" + EscapeJsonString(id) +
+            "\",\"full_id\":\"" + EscapeJsonString(full_id) +
+            "\",\"type\":\"rect\",\"page\":6}";
+        return result;
+    } catch (const std::exception& e) {
+        ESP_LOGE(TAG, "Error in canvas.add_rect: %s", e.what());
+        return std::string("Error: ") + e.what();
+    }
+}
+
+ReturnValue FridgeMcpTools::HandleCanvasAddLine(const PropertyList& properties) {
+    try {
+        std::string id = properties["id"].value<std::string>();
+        int x1 = properties["x1"].value<int>();
+        int y1 = properties["y1"].value<int>();
+        int x2 = properties["x2"].value<int>();
+        int y2 = properties["y2"].value<int>();
+        int width = 1;
+        try { width = properties["width"].value<int>(); } catch (...) {}
+        bool refresh = false;
+        try { refresh = properties["refresh"].value<bool>(); } catch (...) {}
+
+        auto* epaper = Board::GetInstance().GetEpaperDisplay();
+        if (epaper == nullptr) {
+            return ReturnValue("E-paper display not found on this board.");
+        }
+
+        std::string full_id = MakeCanvasId(id);
+
+        if (!CheckCanvasLabelLimit(full_id)) {
+            return ReturnValue("Canvas label limit reached (30). Call fridge.canvas.clear first.");
+        }
+
+        epaper->AddLabel(String(full_id.c_str()), new EpaperLabel(
+            EpaperLabel::Line(x1, y1, x2, y2, width, GxEPD_BLACK, 1, true, 6)));
+
+        SaveCanvasLayout();
+        RefreshCanvasIfNeeded(refresh);
+
+        std::string result = "{\"status\":\"success\",\"id\":\"" + EscapeJsonString(id) +
+            "\",\"full_id\":\"" + EscapeJsonString(full_id) +
+            "\",\"type\":\"line\",\"page\":6}";
+        return result;
+    } catch (const std::exception& e) {
+        ESP_LOGE(TAG, "Error in canvas.add_line: %s", e.what());
+        return std::string("Error: ") + e.what();
+    }
+}
+
+ReturnValue FridgeMcpTools::HandleCanvasRemove(const PropertyList& properties) {
+    try {
+        std::string id = properties["id"].value<std::string>();
+        bool refresh = false;
+        try { refresh = properties["refresh"].value<bool>(); } catch (...) {}
+
+        auto* epaper = Board::GetInstance().GetEpaperDisplay();
+        if (epaper == nullptr) {
+            return ReturnValue("E-paper display not found on this board.");
+        }
+
+        std::string full_id = MakeCanvasId(id);
+        epaper->RemoveLabel(String(full_id.c_str()));
+
+        SaveCanvasLayout();
+        RefreshCanvasIfNeeded(refresh);
+
+        std::string result = "{\"status\":\"success\",\"removed\":\"" + EscapeJsonString(id) + "\"}";
+        return result;
+    } catch (const std::exception& e) {
+        ESP_LOGE(TAG, "Error in canvas.remove: %s", e.what());
+        return std::string("Error: ") + e.what();
+    }
+}
+
+ReturnValue FridgeMcpTools::HandleCanvasClear(const PropertyList& properties) {
+    try {
+        bool refresh = true;
+        try { refresh = properties["refresh"].value<bool>(); } catch (...) {}
+
+        auto* epaper = Board::GetInstance().GetEpaperDisplay();
+        if (epaper == nullptr) {
+            return ReturnValue("E-paper display not found on this board.");
+        }
+
+        int removed = epaper->ClearCanvasLabels();
+
+        // 清空后直接删除 layout.json 文件，而不是写空数组
+        unlink(CANVAS_LAYOUT_FILE);
+        ESP_LOGI(TAG, "Canvas layout file deleted after clear");
+        RefreshCanvasIfNeeded(refresh);
+
+        std::string result = "{\"status\":\"success\",\"removed_count\":" + std::to_string(removed) + "}";
+        return result;
+    } catch (const std::exception& e) {
+        ESP_LOGE(TAG, "Error in canvas.clear: %s", e.what());
+        return std::string("Error: ") + e.what();
+    }
+}
+
+ReturnValue FridgeMcpTools::HandleCanvasAddImage(const PropertyList& properties) {
+    try {
+        std::string id = properties["id"].value<std::string>();
+        std::string name = properties["name"].value<std::string>();
+        int x = properties["x"].value<int>();
+        int y = properties["y"].value<int>();
+        int w = properties["w"].value<int>();
+        int h = properties["h"].value<int>();
+        bool refresh = false;
+        try { refresh = properties["refresh"].value<bool>(); } catch (...) {}
+
+        auto* epaper = Board::GetInstance().GetEpaperDisplay();
+        if (epaper == nullptr) {
+            return ReturnValue("E-paper display not found on this board.");
+        }
+
+        std::string full_id = MakeCanvasId(id);
+
+        // 检查控件数量上限
+        if (!CheckCanvasLabelLimit(full_id)) {
+            return ReturnValue("Canvas label limit reached (30). Call fridge.canvas.clear first.");
+        }
+
+        // 构造文件路径
+        std::string path = std::string("/canvas/") + name;
+        FILE* f = fopen(path.c_str(), "rb");
+        if (!f) {
+            return ReturnValue("Image file not found: " + name + ". Upload it first via POST /api/canvas_image?name=" + name);
+        }
+
+        // 读取文件到缓冲区
+        size_t total_bytes = w * h / 8;  // 1-bpp: 每像素1位，8像素=1字节
+        uint8_t* bitmap = (uint8_t*)malloc(total_bytes);
+        if (!bitmap) {
+            fclose(f);
+            return ReturnValue("Not enough memory for image");
+        }
+
+        size_t read = fread(bitmap, 1, total_bytes, f);
+        fclose(f);
+
+        if (read < total_bytes) {
+            ESP_LOGW(TAG, "Image file smaller than expected: %d/%d bytes", (int)read, (int)total_bytes);
+            // 剩余部分填0（白色）
+            memset(bitmap + read, 0, total_bytes - read);
+        }
+
+        epaper->AddLabel(String(full_id.c_str()), new EpaperLabel(
+            EpaperLabel::Bitmap(x, y, bitmap, w, h, 1, 1, false, false, false, true, 6, name.c_str())));
+
+        // 注意：bitmap 指针由 EpaperLabel 持有，不再在这里释放
+        SaveCanvasLayout();
+        RefreshCanvasIfNeeded(refresh);
+
+        std::string result = "{\"status\":\"success\",\"id\":\"" + EscapeJsonString(id) +
+            "\",\"full_id\":\"" + EscapeJsonString(full_id) +
+            "\",\"type\":\"image\",\"name\":\"" + EscapeJsonString(name) +
+            "\",\"size\":" + std::to_string(read) + ",\"page\":6}";
+        return result;
+    } catch (const std::exception& e) {
+        ESP_LOGE(TAG, "Error in canvas.add_image: %s", e.what());
+        return std::string("Error: ") + e.what();
+    }
+}
+
+ReturnValue FridgeMcpTools::HandleCanvasList(const PropertyList& properties) {
+    try {
+        auto* epaper = Board::GetInstance().GetEpaperDisplay();
+        if (epaper == nullptr) {
+            return ReturnValue("E-paper display not found on this board.");
+        }
+
+        auto* labels = epaper->GetAllLabels();
+        if (!labels) {
+            return std::string("[]");
+        }
+
+        std::string json = "[";
+        bool first = true;
+        for (const auto& pair : *labels) {
+            const String& label_id = pair.first;
+            EpaperLabel* label = pair.second;
+
+            if (strncmp(label_id.c_str(), CANVAS_PREFIX, 7) != 0) continue;
+            if (label->page != 6) continue;
+
+            std::string short_id = label_id.c_str() + 7;
+
+            if (!first) json += ",";
+            first = false;
+
+            switch (label->type) {
+                case EpaperObjectType::TEXT:
+                    json += "{\"type\":\"text\",\"id\":\"" + EscapeJsonString(short_id) +
+                           "\",\"text\":\"" + EscapeJsonString(label->text().c_str()) +
+                           "\",\"x\":" + std::to_string((int)label->x) +
+                           ",\"y\":" + std::to_string((int)(label->y - label->h + 4)) +
+                           ",\"font_size\":" + std::to_string((int)label->h - 4) +
+                           ",\"align\":\"" +
+                           (label->align == EpaperTextAlign::CENTER ? "center" :
+                            label->align == EpaperTextAlign::RIGHT ? "right" : "left") +
+                           "\",\"max_width\":" + std::to_string((int)label->w_max) + "}";
+                    break;
+                case EpaperObjectType::RECT:
+                    json += "{\"type\":\"rect\",\"id\":\"" + EscapeJsonString(short_id) +
+                           "\",\"x\":" + std::to_string((int)label->x) +
+                           ",\"y\":" + std::to_string((int)label->y) +
+                           ",\"w\":" + std::to_string((int)label->w) +
+                           ",\"h\":" + std::to_string((int)label->h) +
+                           ",\"filled\":" + std::string(label->filled ? "true" : "false") + "}";
+                    break;
+                case EpaperObjectType::LINE:
+                    json += "{\"type\":\"line\",\"id\":\"" + EscapeJsonString(short_id) +
+                           "\",\"x1\":" + std::to_string((int)label->x) +
+                           ",\"y1\":" + std::to_string((int)label->y) +
+                           ",\"x2\":" + std::to_string((int)label->x1) +
+                           ",\"y2\":" + std::to_string((int)label->y1) +
+                           ",\"width\":" + std::to_string((int)label->width) + "}";
+                    break;
+                case EpaperObjectType::BITMAP:
+                    if (label->image_name[0] != '\0') {
+                        json += "{\"type\":\"image\",\"id\":\"" + EscapeJsonString(short_id) +
+                               "\",\"name\":\"" + EscapeJsonString(label->image_name) +
+                               "\",\"x\":" + std::to_string((int)label->x) +
+                               ",\"y\":" + std::to_string((int)label->y) +
+                               ",\"w\":" + std::to_string((int)label->w) +
+                               ",\"h\":" + std::to_string((int)label->h) + "}";
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+        json += "]";
+        return json;
+    } catch (const std::exception& e) {
+        ESP_LOGE(TAG, "Error in canvas.list: %s", e.what());
+        return std::string("Error: ") + e.what();
+    }
+}
+
+ReturnValue FridgeMcpTools::HandleCanvasRefresh(const PropertyList& properties) {
+    try {
+        auto* epaper = Board::GetInstance().GetEpaperDisplay();
+        if (epaper == nullptr) {
+            return ReturnValue("E-paper display not found on this board.");
+        }
+
+        epaper->ShowCanvasPage();
+
+        return std::string("{\"status\":\"success\",\"page\":6}");
+    } catch (const std::exception& e) {
+        ESP_LOGE(TAG, "Error in canvas.refresh: %s", e.what());
         return std::string("Error: ") + e.what();
     }
 }

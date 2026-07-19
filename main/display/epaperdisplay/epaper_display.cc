@@ -33,16 +33,14 @@ EpaperDisplay::EpaperDisplay(gpio_num_t cs, gpio_num_t dc, gpio_num_t rst, gpio_
             // 通知时间到，隐藏通知
             ESP_LOGI(TAG, "Notification time out, hiding notification");
             display->LabelHide("notification_label");
-            
+
             // 根据设备状态决定显示时间还是状态
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateIdle) {
-                // 空闲状态显示时间
-                ESP_LOGD(TAG, "Showing time label");
-                display->LabelShow("time_label");
+                // 空闲状态：对话界面不显示时间，显示状态文本
+                display->LabelShow("status_label");
             } else {
                 // 非空闲状态显示状态
-                ESP_LOGD(TAG, "Showing status label");
                 display->LabelShow("status_label");
             }
         },
@@ -68,11 +66,11 @@ EpaperDisplay::EpaperDisplay(gpio_num_t cs, gpio_num_t dc, gpio_num_t rst, gpio_
     do
     {
         display_epaper.fillScreen(GxEPD_WHITE);
-    } while (display_epaper.nextPage()); 
-    
+    } while (display_epaper.nextPage());
+
     // 初始化 U8g2 字体渲染器
     u8g2_for_gfx.begin(display_epaper);
-    
+
     // 初始化 UI（不立即刷新，避免重复刷新卡顿）
     SetupUI();
 
@@ -105,13 +103,13 @@ EpaperDisplay::~EpaperDisplay() {
 
 void EpaperDisplay::SetStatus(const char* status) {
     DisplayLockGuard lock(this);
-    
+
     auto* status_label = GetLabel("status_label");
     if (status_label == nullptr) {
         ESP_LOGW(TAG, "status_label not found");
         return;
     }
-    
+
     // 设置状态文本
     status_label->text = String(status);
 
@@ -126,23 +124,23 @@ void EpaperDisplay::SetStatus(const char* status) {
         LabelHide("time_label");
     }
     LabelShow("status_label");
-    
+
     last_status_update_time_ = std::chrono::system_clock::now();
     ESP_LOGD(TAG, "SetStatus: %s", status);
 }
 
 void EpaperDisplay::SetEmotion(const char* emotion) {
     DisplayLockGuard lock(this);
-    
+
     auto* emoji_image = GetLabel("emoji_image");
     if (emoji_image == nullptr) {
         ESP_LOGW(TAG, "emoji_image not found");
         return;
     }
-    
+
     // 从输入的 emotion 字符串映射到位图图标
     const unsigned char* emotion_bitmap = nullptr;
-    
+
     // 进行字符串比较，映射到对应的表情位图
     if (strcmp(emotion, "neutral") == 0) {
         emotion_bitmap = EpaperImage::EMO_NEUTRAL_32x32;
@@ -191,26 +189,26 @@ void EpaperDisplay::SetEmotion(const char* emotion) {
         emotion_bitmap = EpaperImage::EMO_NEUTRAL_32x32;
         ESP_LOGD(TAG, "Unknown emotion '%s', using neutral", emotion);
     }
-    
+
     // 更新表情标签的位图
     emoji_image->bitmap = emotion_bitmap;
     // emoji_image->visible = true;
-    
+
     // 使用 UpdateLabel 统一刷新
     UpdateLabel("emoji_image");
-    
+
     ESP_LOGD(TAG, "SetEmotion: %s", emotion);
-}  
-  
+}
+
 void EpaperDisplay::SetChatMessage(const char* role, const char* content) {
     DisplayLockGuard lock(this);
-    
+
     auto* chat_message_label = GetLabel("chat_message_label");
     if (chat_message_label == nullptr) {
         ESP_LOGW(TAG, "chat_message_label not found");
         return;
     }
-    
+
     // 如果内容为空，隐藏聊天消息
     if (content == nullptr || content[0] == '\0') {
         if (chat_message_label->visible) {
@@ -221,16 +219,16 @@ void EpaperDisplay::SetChatMessage(const char* role, const char* content) {
         }
         return;
     }
-    
+
     // 设置聊天消息文本并确保可见
     chat_message_label->text = String(content);
     chat_message_label->visible = true;
-    
+
     // 使用 UpdateLabel 统一刷新
     UpdateLabel("chat_message_label");
-    
+
     ESP_LOGD(TAG, "SetChatMessage [%s]: %s", role, content);
-}  
+}
 
 void EpaperDisplay::SetRecipeContent(const char* content) {
     DisplayLockGuard lock(this);
@@ -282,19 +280,42 @@ void EpaperDisplay::SetMemorialDate(int year, int month, int day) {
     }
 }
 
+void EpaperDisplay::ShowCanvasPage() {
+    DisplayLockGuard lock(this);
+    current_page_ = CANVAS_PAGE;
+    UpdateUI(true);
+}
+
+int EpaperDisplay::ClearCanvasLabels() {
+    DisplayLockGuard lock(this);
+    std::vector<String> to_remove;
+    for (auto& pair : ui_labels_) {
+        // 检查 id 是否以 "canvas_" 开头
+        if (strncmp(pair.first.c_str(), "canvas_", 7) == 0) {
+            to_remove.push_back(pair.first);
+        }
+    }
+    int removed = 0;
+    for (const auto& id : to_remove) {
+        RemoveLabel(id);
+        removed++;
+    }
+    return removed;
+}
+
 void EpaperDisplay::ShowNotification(const std::string &notification, int duration_ms) {
     ShowNotification(notification.c_str(), duration_ms);
 }
 
 void EpaperDisplay::ShowNotification(const char* notification, int duration_ms) {
     DisplayLockGuard lock(this);
-    
+
     auto* notification_label = GetLabel("notification_label");
     if (notification_label == nullptr) {
         ESP_LOGW(TAG, "notification_label not found");
         return;
     }
-    
+
     // 设置通知文本
     notification_label->text = String(notification);
 
@@ -309,12 +330,12 @@ void EpaperDisplay::ShowNotification(const char* notification, int duration_ms) 
         LabelHide("time_label");
     }
     LabelShow("notification_label");
-    
+
     // 停止之前的定时器
     if (notification_timer_ != nullptr) {
         esp_timer_stop(notification_timer_);
     }
-    
+
     // 启动定时器，在指定时间后恢复显示状态
     if (notification_timer_ != nullptr && duration_ms > 0) {
         ESP_ERROR_CHECK(esp_timer_start_once(notification_timer_, duration_ms * 1000));
@@ -324,7 +345,7 @@ void EpaperDisplay::ShowNotification(const char* notification, int duration_ms) 
 void EpaperDisplay::UpdateStatusBar(bool update_all) {
     auto& app = Application::GetInstance();
     auto& board = Board::GetInstance();
-    
+
     // 每 10 秒更新一次网络图标
     static int seconds_counter = 0;
     if (update_all || seconds_counter++ % 10 == 0) {
@@ -340,29 +361,29 @@ void EpaperDisplay::UpdateStatusBar(bool update_all) {
         if (std::find(allowed_states.begin(), allowed_states.end(), device_state) != allowed_states.end()) {
             const char* icon = board.GetNetworkStateIcon();
             if (icon != nullptr) {
-                // 根据 Font Awesome 图标映射到 Siji 字体的 Unicode 编码                
+                // 根据 Font Awesome 图标映射到 Siji 字体的 Unicode 编码
                 // 保存上次的icon用于对比
-                static const char* last_icon = nullptr;                
+                static const char* last_icon = nullptr;
                 // 只在icon变化时才更新
                 if (last_icon != icon) {
                     const char* siji_icon = nullptr;
                     // 通过判断 UTF-8 字节来区分WiFi状态
                     // Font Awesome WiFi Slash 的 UTF-8 编码是: \xef\x87\xab
                     // 其他WiFi图标统一映射为 siji wifi
-                    if (strstr(icon, "\xef\x9a\xac") != nullptr) {  
-                        // WiFi 未连接  
+                    if (strstr(icon, "\xef\x9a\xac") != nullptr) {
+                        // WiFi 未连接
                         siji_icon = EpaperFont::Siji::WIFI_DISCONNECTED;
                     } else if (strstr(icon, "\xef\x9a\xaa") != nullptr) {
                     //   弱信号
                         siji_icon = EpaperFont::Siji::WIFI_WEAK;
                     } else if (strstr(icon, "\xef\x9a\xab") != nullptr) {
                     //   中信号
-                        siji_icon = EpaperFont::Siji::WIFI_MEDIUM; 
-                    } else {  
-                        // WiFi 强信号或配置模式  
+                        siji_icon = EpaperFont::Siji::WIFI_MEDIUM;
+                    } else {
+                        // WiFi 强信号或配置模式
                         siji_icon = EpaperFont::Siji::WIFI_STRONG;
-                    }  
-                    
+                    }
+
                     DisplayLockGuard lock(this);
                     auto* network_label = GetLabel("network_label");
                     if (network_label) {
@@ -370,45 +391,34 @@ void EpaperDisplay::UpdateStatusBar(bool update_all) {
                         UpdateLabel("network_label");
                         ESP_LOGD(TAG, "Network icon updated");
                     }
-                    
+
                     last_icon = icon;
                 }
             }
         }
     }
-    
+
     // 只在空闲状态下更新时间显示
     if (app.GetDeviceState() == kDeviceStateIdle) {
         // 每 30 秒更新一次时间
         if (update_all || last_status_update_time_ + std::chrono::seconds(30) < std::chrono::system_clock::now()) {
             time_t now = time(NULL);
             struct tm* tm = localtime(&now);
-            
+
             // 检查系统时间是否已设置
             if (tm->tm_year >= 2025 - 1900) {
                 char time_str[16];
                 strftime(time_str, sizeof(time_str), "%H:%M", tm);
-                
+
                 ESP_LOGD(TAG, "Updating time to: %s", time_str);
-                
+
                 DisplayLockGuard lock(this);
-                
-                // 更新 time_label 的文本
+
+                // 更新 time_label 的文本（供其他页面同步使用，对话界面不再显示）
                 auto* time_label = GetLabel("time_label");
                 if (time_label) {
-                    time_label->text = String(time_str);   
-                    ESP_LOGI(TAG, "Updating time label to: %s", time_str);                 
-                    // 隐藏通知和状态，显示时间
-                    auto* notification_label = GetLabel("notification_label");
-                    if (notification_label && notification_label->visible) {
-                        LabelHide("notification_label");
-                    }
-                    auto* status_label = GetLabel("status_label");
-                    if (status_label && status_label->visible) {
-                        LabelHide("status_label");
-                    }                    
-                    // 显示时间标签
-                    LabelShow("time_label");
+                    time_label->text = String(time_str);
+                    // 对话界面不显示时间，不再切换显示
                 }
                 // 同步更新 home_time
                 if (auto* home_time = GetLabel("home_time")) {
@@ -434,7 +444,7 @@ void EpaperDisplay::UpdateStatusBar(bool update_all) {
                     }
                     last_mday = tm->tm_mday;
                 }
-                
+
                 last_status_update_time_ = std::chrono::system_clock::now();
             } else {
                 ESP_LOGW(TAG, "System time is not set, tm_year: %d", tm->tm_year);
@@ -445,13 +455,13 @@ void EpaperDisplay::UpdateStatusBar(bool update_all) {
     }
 }
 
-void EpaperDisplay::SetTheme(Theme* theme) {  
+void EpaperDisplay::SetTheme(Theme* theme) {
 
-}  
+}
 
 void EpaperDisplay::SetupUI() {
     DisplayLockGuard lock(this);
-    
+
     // ================================
     // 屏幕尺寸：128x296 (旋转后可能为296x128，根据rotation设置)
     // 布局参考LCD的垂直结构，适配墨水屏尺寸
@@ -461,22 +471,24 @@ void EpaperDisplay::SetupUI() {
     // ===== 1. 状态栏 (status_bar) =====
     // 位置：屏幕顶部，高度20像素
     // 水平布局：网络 | 通知(隐藏) | 状态/时间 | 静音 | 电池
-    
-    // 1.1 网络图标 (network_label)
-    AddLabel("network_label", new EpaperLabel(
-        EpaperLabel::Bitmap(240, 0, EpaperImage::wifi_full_24x24, 24, 24, 1, 1, false, false, false, true, 1)));
-    
-    // 1.2 通知文本 (notification_label) - 默认隐藏
-    AddLabel("notification_label", new EpaperLabel(
-        EpaperLabel::Text("", 88, 5, 120, 16, 12, u8g2_font_wqy12_t_gb2312,
-                         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, false, false, 1)));
 
-    // 1.3 状态标签 (status_label) - 居中显示
+    // ===== 对话界面布局 (296×128) =====
+    // 左右分区：左侧 96px (状态+表情)，右侧 192px (通知+对话文本)
+
+    // --- 左侧区域 (x: 0~95) ---
+
+    // 网络图标 - 已隐藏
+    AddLabel("network_label", new EpaperLabel(
+        EpaperLabel::Bitmap(240, 0, EpaperImage::wifi_full_24x24, 24, 24, 1, 1, false, false, false, false, 1)));
+
+    // 状态标签 (status_label) - 左侧居中，在表情正上方
+    // 左侧区域 0~95，居中 x≈48，12px 字体约 6 行 6 列
     AddLabel("status_label",
              new EpaperLabel(EpaperLabel::Text(
-                 "waiting", 98, 5, 100, 16, 12, u8g2_font_wqy12_t_gb2312, GxEPD_BLACK,
+                 "waiting", 0, 10, 96, 16, 12, u8g2_font_wqy12_t_gb2312, GxEPD_BLACK,
                  EpaperTextAlign::CENTER, 1, true, false, 1)));
-    // 1.4 时间标签（time_label） - 居中显示
+
+    // 时间标签 - 已隐藏，对话界面不再显示时间
     AddLabel("time_label",
              new EpaperLabel(EpaperLabel::Text([]() {
                  time_t now = std::time(nullptr);
@@ -486,60 +498,56 @@ void EpaperDisplay::SetupUI() {
                  strftime(buf, sizeof(buf), "%H:%M", &tm_now);
                  return String(buf);
              }, 98, 0, 100, 26, 26, u8g2_font_freedoomr25_mn, GxEPD_BLACK,
-                 EpaperTextAlign::CENTER, 1, true, false, 1)));
-    
-    // 1.5 静音图标 (mute_label) - 位置保持在状态栏内(y=0~31)
+                 EpaperTextAlign::CENTER, 1, false, false, 1)));
+
+    // 静音图标 (mute_label) - 右上角
     AddLabel("mute_label", new EpaperLabel(
-        EpaperLabel::Text("", 260, 0, 0, 0, 21, u8g2_font_emoticons21_tr,
+        EpaperLabel::Text("", 270, 2, 0, 0, 21, u8g2_font_emoticons21_tr,
                          GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 1)));
-    
-    // 1.6 电池图标 (battery_label)
+
+    // 电池图标 - 已隐藏
     AddLabel("battery_label", new EpaperLabel(
-        EpaperLabel::Bitmap(270, 0, EpaperImage::battery_full_24x24, 24, 24, 1, 1, false, false, false, true, 1)));
-    
-    // 1.7 状态栏分隔线
+        EpaperLabel::Bitmap(270, 0, EpaperImage::battery_full_24x24, 24, 24, 1, 1, false, false, false, false, 1)));
+
+    // 左右分区竖线
     AddLabel("status_bar_divider", new EpaperLabel(
-        EpaperLabel::Line(10, 31, 286, 31, 2, GxEPD_BLACK, 1, true, 1)));
-    
-    // ===== 2. 内容区 (content) =====
-    // 位置：状态栏下方，占据剩余空间 (y: 25 ~ 128)
-    
-    // 2.1 表情容器 (emoji_box)
-    // 2.1.1 表情图标 (emoji_label) - 中央显示
-    AddLabel("emoji_label", new EpaperLabel(
-        EpaperLabel::Text(EpaperFont::Emoticons::NEUTRAL, 193, 60, 30, 21, 21, u8g2_font_emoticons21_tr, 
-                         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, false, false, 1)));
-    
-    // 2.1.2 表情图片 (emoji_image) - 默认隐藏
-    // 注：墨水屏位图需要实际资源，这里先占位
+        EpaperLabel::Line(96, 2, 96, 126, 1, GxEPD_BLACK, 1, true, 1)));
+
+    // 表情图片 (emoji_image) - 左侧居中显示
+    // 注：emoji_label（文字版表情）已移除，避免隐藏时白色填充区域覆盖 emoji_image
     AddLabel("emoji_image", new EpaperLabel(
-        EpaperLabel::Bitmap(132, 35, EpaperImage::EMO_NEUTRAL_32x32, 32, 32, 1, 1, false, false, false, true, 1)));
-    
-    // 2.2 预览图片 (preview_image) - 默认隐藏
-    // AddLabel("preview_image", new EpaperLabel(
-    //     EpaperLabel::Bitmap(10, 30, nullptr, 276, 70, 1, 1, false, false, false, false)));
-    
-    // 2.3 聊天消息 (chat_message_label)
+        EpaperLabel::Bitmap(32, 50, EpaperImage::EMO_NEUTRAL_32x32, 32, 32, 1, 1, false, false, false, true, 1)));
+
+    // --- 右侧区域 (x: 100~295) ---
+
+    // 通知文本 (notification_label) - 右侧居中，默认隐藏
+    // 右侧区域 100~295，宽 192px
+    AddLabel("notification_label", new EpaperLabel(
+        EpaperLabel::Text("", 100, 5, 192, 16, 12, u8g2_font_wqy12_t_gb2312,
+                         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, false, false, 1)));
+
+    // 聊天消息 (chat_message_label) - 右侧垂直居中，水平居中
+    // 右侧区域 x:100~295，宽 192px，16px 字体
     AddLabel("chat_message_label", new EpaperLabel(
-        EpaperLabel::Text("", 28, 85, 240, 0, 16, u8g2_font_wqy16_t_gb2312,
+        EpaperLabel::Text("", 100, 50, 192, 0, 16, u8g2_font_wqy16_t_gb2312,
                          GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 1)));
-    
+
     // ===== 3. 低电量弹窗 (low_battery_popup) - 默认隐藏 =====
     // 位置：底部居中
     AddLabel("low_battery_popup_bg", new EpaperLabel(
         EpaperLabel::RoundRect(20, 100, 256, 20, 6, true, GxEPD_BLACK, 1, false, 1)));
-    
+
     AddLabel("low_battery_label", new EpaperLabel(
         EpaperLabel::Text("电量低，请充电", 103, 102, 90, 0, 16, u8g2_font_wqy16_t_gb2312,
                          GxEPD_WHITE, EpaperTextAlign::CENTER, 1, false, false, 1)));
-// ==========================================================page 1 end==========================================================    
+// ==========================================================page 1 end==========================================================
 // ==========================================================page 2：HOME DashBoard start========================================================
-    
+
     // ===== 2.1 页面分隔线 =====
     AddLabel("home_line_1", new EpaperLabel(EpaperLabel::Line(10, 30, 286, 30, 2, GxEPD_BLACK, 1, true, 2)));    // 水平分隔线
     AddLabel("home_line_2", new EpaperLabel(EpaperLabel::Line(190, 35, 190, 120, 2, GxEPD_BLACK, 1, true, 2))); // 竖直分隔线
     AddLabel("home_line_3", new EpaperLabel(EpaperLabel::Line(10, 100, 150, 100, 1, GxEPD_BLACK, 1, true, 2))); // 内部分隔线
-    
+
     // ===== 2.2 时间区域（顶部左侧） =====
     AddLabel("home_slogan_1", new EpaperLabel(EpaperLabel::Text("今天吃什么?", 5, 4, 100, 16, 16, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
     AddLabel("home_time", new EpaperLabel(EpaperLabel::Text([]() {
@@ -549,7 +557,7 @@ void EpaperDisplay::SetupUI() {
                  char buf[16];
                  strftime(buf, sizeof(buf), "%H:%M", &tm_now);
                  return String(buf);
-             }, 5, 40, 150, 45, 45, u8g2_font_mystery_quest_56_tn, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));  
+             }, 5, 40, 150, 45, 45, u8g2_font_mystery_quest_56_tn, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
     AddLabel("home_date", new EpaperLabel(EpaperLabel::Text([]() {
                  time_t now = std::time(nullptr);
                  struct tm tm_now;
@@ -560,18 +568,18 @@ void EpaperDisplay::SetupUI() {
                  for (char *p = buf; *p; ++p) *p = toupper(*p);
                  return String(buf);
              }, 20, 105, 120, 18, 18, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
-    
+
     // ===== 2.3 状态栏（顶部右侧） =====
     AddLabel("home_battery", new EpaperLabel(EpaperLabel::Bitmap(270, 0, EpaperImage::battery_full_24x24, 24, 24, 1, 1, false, false, false, true, 2)));
     AddLabel("home_network", new EpaperLabel(EpaperLabel::Bitmap(240, 0, EpaperImage::wifi_full_24x24, 24, 24, 1, 1, false, false, false, true, 2)));
-    
+
     // ===== 2.4 冰箱统计区域（右侧列表） =====
     // 冰箱图标
     AddLabel("home_Fridge", new EpaperLabel(EpaperLabel::Bitmap(200, 35, EpaperImage::Fridge_24x24, 24, 24, 1, 1, false, false, false, true, 2)));
     AddLabel("home_total_items", new EpaperLabel(EpaperLabel::Text([this]() {
         return String(FridgeManager::GetInstance().GetStatistics().total_items) + "件";
     }, 230, 38, 70, 18, 18, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
-    
+
     // 分类图标
     AddLabel("home_Fridge_category", new EpaperLabel(EpaperLabel::Bitmap(200, 65, EpaperImage::Fridge_category_24x24, 24, 24, 1, 1, false, false, false, true, 2)));
     AddLabel("home_total_category", new EpaperLabel(EpaperLabel::Text([this]() {
@@ -582,25 +590,25 @@ void EpaperDisplay::SetupUI() {
         }
         return String(active_cats) + "类";
     }, 230, 67, 70, 18, 18, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
-    
+
     // 过期警告图标
     AddLabel("home_Fridge_warning", new EpaperLabel(EpaperLabel::Bitmap(200, 95, EpaperImage::Fridge_warning_24x24, 24, 24, 1, 1, false, false, false, true, 2)));
     AddLabel("home_total_warning", new EpaperLabel(EpaperLabel::Text([this]() {
         return String(FridgeManager::GetInstance().GetStatistics().expired_items) + "过期";
     }, 230, 98, 70, 18, 18, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
-    
+
 // ==========================================================page 2 end==========================================================
 // ==========================================================page 3：Food list start=============================================
-    
+
     // ===== 3.1 页面标题栏 =====
     // 标题：冰箱食材 + 图标
     AddLabel("fridge_list_icon", new EpaperLabel(EpaperLabel::Bitmap(10, 2, EpaperImage::Fridge_24x24, 24, 24, 1, 1, false, false, false, true, 3)));
-    
+
     AddLabel("fridge_list_title", new EpaperLabel(EpaperLabel::Text("冰箱食材", 40, 4, 200, 24, 16, u8g2_font_wqy16_t_gb2312,GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 3)));
-    
+
     // 标题分隔线
     AddLabel("fridge_list_divider", new EpaperLabel(EpaperLabel::Line(10, 32, 286, 32, 2, GxEPD_BLACK, 1, true, 3)));
-    
+
     // ===== 3.2 食材列表项（最多显示4行，每行高度约18像素） =====
     RefreshFridgeLabelsInternal();
 
@@ -631,7 +639,7 @@ void EpaperDisplay::SetupUI() {
             93, 42, 188, 13, 12, u8g2_font_wqy12_t_gb2312,
             GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 4)));
 
-// ==========================================================page 4 end=====================================================    
+// ==========================================================page 4 end=====================================================
 // ==========================================================page 5：HOME Picture Display start=============================================
 
     // 爱心图片（居中放在相框内偏上位置）
@@ -695,9 +703,12 @@ void EpaperDisplay::SetPowerSaveMode(bool on) {
 
 }
 
-void EpaperDisplay::SetPage(uint16_t page) {
-    if (current_page_ != page) {
-        current_page_ = page;
+void EpaperDisplay::SetPage(uint16_t page, bool refresh) {
+    current_page_ = page;
+
+    // refresh=true 时统一由 SetPage 持锁刷新，调用方无需直接操作显示锁。
+    if (refresh) {
+        DisplayLockGuard lock(this);
         UpdateUI(true);
     }
 }
@@ -751,6 +762,10 @@ void EpaperDisplay::RemoveLabel(const String& id) {
     }
 }
 
+std::map<String, EpaperLabel*>* EpaperDisplay::GetAllLabels() {
+    return &ui_labels_;
+}
+
 void EpaperDisplay::LabelShow(const String& id) {
     // 注意：调用者必须已持有锁
     EpaperLabel* label = GetLabel(id);
@@ -770,7 +785,7 @@ void EpaperDisplay::LabelHide(const String& id) {
       if (label->visible) {
             label->visible = false;
             UpdateLabel(id);
-            ESP_LOGD(TAG, "Label '%s' hidden", id.c_str());        
+            ESP_LOGD(TAG, "Label '%s' hidden", id.c_str());
         }
 
     } else {
@@ -780,10 +795,10 @@ void EpaperDisplay::LabelHide(const String& id) {
 
 void EpaperDisplay::RenderLabel(EpaperLabel* label) {
     if (label == nullptr) return;
-    
+
     // 设置旋转方向
     display_epaper.setRotation(display_rotation_);
-    
+
     // 如果不可见，仅用白色填充区域来清除内容
     if (!label->visible) {
         // 计算需要清除的区域
@@ -791,7 +806,7 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
         int16_t clear_y = label->y;
         uint16_t clear_w = 0;
         uint16_t clear_h = 0;
-        
+
         // 根据标签类型确定清除区域
         switch (label->type) {
             case EpaperObjectType::TEXT: {
@@ -809,7 +824,7 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
                 }
                 break;
             }
-                
+
             case EpaperObjectType::BITMAP:
             case EpaperObjectType::RECT:
             case EpaperObjectType::ROUND_RECT: {
@@ -818,7 +833,7 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
                 clear_h = label->h;
                 break;
             }
-                
+
             case EpaperObjectType::LINE: {
                 // 对于线条，计算包围盒，考虑线寽
                 int16_t min_x = std::min(label->x, label->x1);
@@ -831,7 +846,7 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
                 clear_h = max_y - min_y + label->width;
                 break;
             }
-                
+
             case EpaperObjectType::CIRCLE: {
                 // 对于圆形，计算包围盒
                 clear_x = label->x - label->radius;
@@ -840,7 +855,7 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
                 clear_h = label->radius * 2 + 1;
                 break;
             }
-                
+
             case EpaperObjectType::TRIANGLE: {
                 // 对于三角形，计算包围盒
                 int16_t min_x = std::min({label->x, label->x1, label->x2});
@@ -853,14 +868,14 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
                 clear_h = max_y - min_y + 1;
                 break;
             }
-                
+
             case EpaperObjectType::PIXEL: {
                 // 对于像素点，只清除单个像素
                 clear_w = 1;
                 clear_h = 1;
                 break;
             }
-                
+
             default: {
                 // 默认情况使用较小的清除区域
                 clear_w = 50;
@@ -868,20 +883,20 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
                 break;
             }
         }
-        
+
         // 用白色填充区域（清除）
         if (clear_w > 0 && clear_h > 0) {
             display_epaper.fillRect(clear_x, clear_y, clear_w, clear_h, GxEPD_WHITE);
         }
         return;
     }
-    
+
     switch (label->type) {
     case EpaperObjectType::TEXT: {
             // 统一使用 U8g2 字体渲染（支持中英文）
             if (label->u8g2_font != nullptr) {
                 u8g2_for_gfx.setFont(label->u8g2_font);
-                
+
                 String label_text = label->text();
 
                 // 如果启用了反色，先填充背景
@@ -891,11 +906,11 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
                     uint16_t bg_color = (label->color == GxEPD_BLACK) ? GxEPD_BLACK : GxEPD_WHITE;
                     display_epaper.fillRect(bounds.x, bounds.y, bounds.w, bounds.h, bg_color);
                 }
-                
-                u8g2_for_gfx.setForegroundColor(label->invert ? 
-                    ((label->color == GxEPD_BLACK) ? GxEPD_WHITE : GxEPD_BLACK) : 
+
+                u8g2_for_gfx.setForegroundColor(label->invert ?
+                    ((label->color == GxEPD_BLACK) ? GxEPD_WHITE : GxEPD_BLACK) :
                     label->color);
-                
+
                 // 如果设置了最大宽度限制，执行换行逻辑
                 if (label->w_max > 0) {
                     RenderTextWithWrap(label);
@@ -909,14 +924,14 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
                         int16_t text_w = u8g2_for_gfx.getUTF8Width(label_text.c_str());
                         cursor_x = label->x - text_w;
                     }
-                    
+
                     u8g2_for_gfx.setCursor(cursor_x, label->y);
                     u8g2_for_gfx.print(label_text);
                 }
             }
             break;
         }
-            
+
         case EpaperObjectType::RECT: {
             if (label->filled) {
                 display_epaper.fillRect(label->x, label->y, label->w, label->h, label->color);
@@ -925,7 +940,7 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
             }
             break;
         }
-            
+
         case EpaperObjectType::LINE: {
             // 平行估綗：简化处理线寽，针对水平线和端切线
             if (label->width <= 1) {
@@ -935,7 +950,7 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
                 // 根据线段水平/端切方向绘制多条线
                 int16_t dx = label->x1 - label->x;
                 int16_t dy = label->y1 - label->y;
-                
+
                 // 水平线或端切线
                 if (dx == 0) {
                     // 端切线（竫直）- 根据线寽扩展 x
@@ -956,7 +971,7 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
             }
             break;
         }
-            
+
         case EpaperObjectType::CIRCLE: {
             if (label->filled) {
                 display_epaper.fillCircle(label->x, label->y, label->radius, label->color);
@@ -968,14 +983,14 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
 
         case EpaperObjectType::TRIANGLE: {
             if (label->filled) {
-                display_epaper.fillTriangle(label->x, label->y, 
+                display_epaper.fillTriangle(label->x, label->y,
                                           label->x1, label->y1,
-                                          label->x2, label->y2, 
+                                          label->x2, label->y2,
                                           label->color);
             } else {
-                display_epaper.drawTriangle(label->x, label->y, 
+                display_epaper.drawTriangle(label->x, label->y,
                                           label->x1, label->y1,
-                                          label->x2, label->y2, 
+                                          label->x2, label->y2,
                                           label->color);
             }
             break;
@@ -983,12 +998,12 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
 
         case EpaperObjectType::ROUND_RECT: {
             if (label->filled) {
-                display_epaper.fillRoundRect(label->x, label->y, 
-                                           label->w, label->h, 
+                display_epaper.fillRoundRect(label->x, label->y,
+                                           label->w, label->h,
                                            label->radius, label->color);
             } else {
-                display_epaper.drawRoundRect(label->x, label->y, 
-                                           label->w, label->h, 
+                display_epaper.drawRoundRect(label->x, label->y,
+                                           label->w, label->h,
                                            label->radius, label->color);
             }
             break;
@@ -998,15 +1013,15 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
             display_epaper.drawPixel(label->x, label->y, label->color);
             break;
         }
-            
+
         case EpaperObjectType::BITMAP: {
             if (label->bitmap != nullptr) {
                 // 处理镜像操作
                 int16_t draw_x = label->x;
                 int16_t draw_y = label->y;
                 const uint8_t* bitmap_src = label->bitmap;
-                uint8_t* temp_bitmap = nullptr;                
-                
+                uint8_t* temp_bitmap = nullptr;
+
                 // 如果需要镜像，记录警告（需要实现位图变换）
                 if (label->mirror_h || label->mirror_v) {
                     temp_bitmap = mirrorBitmap(label->bitmap, label->w, label->h,
@@ -1014,7 +1029,7 @@ void EpaperDisplay::RenderLabel(EpaperLabel* label) {
                     bitmap_src = temp_bitmap;
                 }
 
-                
+
                 // 根据 depth 选择不同的绘制方法
                 if (label->depth == 1) {
                     // 黑白位图绘制
@@ -1052,7 +1067,7 @@ void EpaperDisplay::UpdateLabel(const String& id) {
         ESP_LOGW(TAG, "Label '%s' not found for update", id.c_str());
         return;
     }
-    
+
     // 局部刷新：根据 label 区域设置局部窗口
     EpaperLabel* label = it->second;
 
@@ -1061,7 +1076,7 @@ void EpaperDisplay::UpdateLabel(const String& id) {
         ESP_LOGD(TAG, "Skip update for label '%s' on page %d (current %d)", id.c_str(), label->page, current_page_);
         return;
     }
-    
+
     String label_text = label->text();
 
     // 计算刷新区域
@@ -1069,15 +1084,15 @@ void EpaperDisplay::UpdateLabel(const String& id) {
     int16_t refresh_y = label->y;
     uint16_t refresh_w = 50;
     uint16_t refresh_h = 20;
-    
+
     // 如果是文本类型，需要动态计算边界
     if (label->type == EpaperObjectType::TEXT) {
         display_epaper.setRotation(display_rotation_);
-        
+
         // 使用 U8g2 字体边界计算
         if (label->u8g2_font != nullptr) {
             u8g2_for_gfx.setFont(label->u8g2_font);
-            
+
             // 保存旧的宽度和高度
             uint16_t old_h = label->h;
 
@@ -1095,7 +1110,7 @@ void EpaperDisplay::UpdateLabel(const String& id) {
             // 更新 label 的 h 为新计算的值
             label->h = new_h;
 
-            ESP_LOGI(TAG, "Label '%s',refresh_x=%d,refresh_y=%d, old_h=%d, new: w=%d h=%d, refresh: w=%d h=%d", 
+            ESP_LOGI(TAG, "Label '%s',refresh_x=%d,refresh_y=%d, old_h=%d, new: w=%d h=%d, refresh: w=%d h=%d",
                      id.c_str(), refresh_x, refresh_y, old_h, new_w, new_h, refresh_w, refresh_h);
         } else {
             refresh_x = label->x;
@@ -1110,13 +1125,13 @@ void EpaperDisplay::UpdateLabel(const String& id) {
         refresh_w = label->w;
         refresh_h = label->h;
     }
-    
+
     // 边界检查
     if(refresh_x < 0||refresh_y < 0||refresh_w <= 0||refresh_h <= 0)
     {
         return;
     }
-    
+
     display_epaper.setRotation(display_rotation_);
     display_epaper.setPartialWindow(label->x, refresh_y, refresh_w, refresh_h);
     display_epaper.firstPage();
@@ -1129,7 +1144,7 @@ void EpaperDisplay::UpdateLabel(const String& id) {
 void EpaperDisplay::RefreshFridgeLabels() {
     DisplayLockGuard lock(this);
     RefreshFridgeLabelsInternal();
-    
+
     // 如果当前正在显示冰箱相关的页面（Page 2 或 3），统一触发一次局部刷新
     if (current_page_ == FRIDGE_STATS_PAGE || current_page_ == FOOD_LIST_PAGE) {
         UpdateUI(false);
@@ -1142,7 +1157,7 @@ void EpaperDisplay::RefreshFridgeLabelsInternal() {
     // 1. 更新统计数据（仅更新 Label 的 text 函数闭包，不触发刷新）
     // 这里的统计数据是通过 SetupUI 中注册的 lambda 实时获取的，
     // 我们只需要标记 ui_dirty_ 或者确保 Label 存在即可。
-    
+
     // 2. 重构第 3 页的食材列表
     // 首先移除旧的列表标签
     for (int i = 1; i <= 4; ++i) {
@@ -1155,7 +1170,7 @@ void EpaperDisplay::RefreshFridgeLabelsInternal() {
 
     // 获取并排序食材
     auto all_items = FridgeManager::GetInstance().GetAllItems();
-    std::sort(all_items.begin(), all_items.end(), 
+    std::sort(all_items.begin(), all_items.end(),
               [](const FridgeItem& a, const FridgeItem& b) {
                   return a.add_time > b.add_time;
               });
@@ -1168,27 +1183,27 @@ void EpaperDisplay::RefreshFridgeLabelsInternal() {
         const FridgeItem& item = all_items[row];
         int16_t y = start_y + row * row_height;
         String row_num = String(row + 1);
-        
+
         const uint8_t* icon_bitmap = EpaperImage::GetCategoryIcon(item.category);
-        
+
         // 使用 AddLabel 重新添加标签，这些标签会自动应用到 UI
         AddLabel("item_icon_" + row_num, new EpaperLabel(
             EpaperLabel::Bitmap(10, y, icon_bitmap, 24, 24, 1, 1, false, false, false, true, 3)));
-        
+
         AddLabel("item_name_" + row_num, new EpaperLabel(
             EpaperLabel::Text([item]() {
                 return String(item.name.c_str());
-            }, 40, y + 2, 120, 18, 16, u8g2_font_wqy16_t_gb2312, 
+            }, 40, y + 2, 120, 18, 16, u8g2_font_wqy16_t_gb2312,
             GxEPD_BLACK, EpaperTextAlign::LEFT, 1, true, false, 3)));
-        
+
         AddLabel("item_qty_" + row_num, new EpaperLabel(
             EpaperLabel::Text([item]() {
                 char buf[32];
                 snprintf(buf, sizeof(buf), "%.1f %s", item.quantity, item.unit.c_str());
                 return String(buf);
-            }, 160, y + 2, 70, 18, 16, u8g2_font_wqy16_t_gb2312, 
+            }, 160, y + 2, 70, 18, 16, u8g2_font_wqy16_t_gb2312,
             GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 3)));
-        
+
         AddLabel("item_status_" + row_num, new EpaperLabel(
             EpaperLabel::Text([item]() {
                 time_t now = std::time(nullptr);
@@ -1202,7 +1217,7 @@ void EpaperDisplay::RefreshFridgeLabelsInternal() {
                         return String("新鲜");
                     }
                 }
-            }, 220, y + 2, 70, 18, 16, u8g2_font_wqy16_t_gb2312, 
+            }, 220, y + 2, 70, 18, 16, u8g2_font_wqy16_t_gb2312,
             GxEPD_BLACK, EpaperTextAlign::RIGHT, 1, true, false, 3)));
     }
 }
@@ -1216,11 +1231,11 @@ void EpaperDisplay::UpdateUI(bool fullRefresh) {
         // 局部刷新（默认刷新整个屏幕）
         display_epaper.setPartialWindow(0, 0, display_epaper.width(), display_epaper.height());
     }
-    
+
     display_epaper.firstPage();
     do {
         display_epaper.fillScreen(GxEPD_WHITE);
-        
+
         // 渲染所有 label
         for (auto& pair : ui_labels_) {
             EpaperLabel* label = pair.second;
@@ -1228,7 +1243,7 @@ void EpaperDisplay::UpdateUI(bool fullRefresh) {
             RenderLabel(label);
         }
     } while (display_epaper.nextPage());
-    
+
     ui_dirty_ = false;
 }
 
@@ -1265,10 +1280,10 @@ void EpaperDisplay::RenderTextWithWrap(EpaperLabel* label) {
     if (label->u8g2_font == nullptr || label->w_max == 0) {
         return;
     }
-    
+
     u8g2_for_gfx.setFont(label->u8g2_font);
     u8g2_for_gfx.setForegroundColor(label->color);
-    
+
     String text = label->text();
     int16_t cursor_y = label->y;
     int16_t line_height = u8g2_for_gfx.getFontAscent() + 6;
@@ -1366,11 +1381,11 @@ void EpaperDisplay::RenderTextWithWrap(EpaperLabel* label) {
 // 计算文本边界（支持换行）
 EpaperDisplay::TextBounds EpaperDisplay::CalculateTextBounds(EpaperLabel* label) {
     TextBounds bounds = {0, 0, 0, 0};
-    
+
     if (!label || !label->u8g2_font) return bounds;
 
     u8g2_for_gfx.setFont(label->u8g2_font);
-    
+
     String label_text = label->text();
     int16_t ascent  = u8g2_for_gfx.getFontAscent();
     int16_t descent = u8g2_for_gfx.getFontDescent();
