@@ -47,6 +47,7 @@ private:
     ReturnValue HandleElementRemove(const PropertyList& properties);
     ReturnValue HandleElementList(const PropertyList& properties);
     ReturnValue HandlePageClear(const PropertyList& properties);
+    ReturnValue HandleNetworkInfo(const PropertyList& properties);
 };
 
 #endif // FRIDGE_MCP_H

@@ -17,6 +17,24 @@
 
 #define TAG "EpaperDisplay"
 
+namespace {
+
+bool GetValidLocalTime(struct tm* tm_out) {
+    if (tm_out == nullptr) {
+        return false;
+    }
+    time_t now = std::time(nullptr);
+    localtime_r(&now, tm_out);
+    return tm_out->tm_year >= (2025 - 1900);
+}
+
+bool IsSystemTimeValid() {
+    struct tm tm_now;
+    return GetValidLocalTime(&tm_now);
+}
+
+}  // namespace
+
 EpaperDisplay::EpaperDisplay(gpio_num_t cs, gpio_num_t dc, gpio_num_t rst, gpio_num_t busy) :
     display_epaper(GxEPD2_290_T5D(cs, dc, rst, busy)){
     // 创建互斥锁
@@ -103,6 +121,7 @@ EpaperDisplay::~EpaperDisplay() {
 
 void EpaperDisplay::SetStatus(const char* status) {
     DisplayLockGuard lock(this);
+    ApplyChatPageLayoutForState();
 
     auto* status_label = GetLabel("status_label");
     if (status_label == nullptr) {
@@ -202,6 +221,7 @@ void EpaperDisplay::SetEmotion(const char* emotion) {
 
 void EpaperDisplay::SetChatMessage(const char* role, const char* content) {
     DisplayLockGuard lock(this);
+    ApplyChatPageLayoutForState();
 
     auto* chat_message_label = GetLabel("chat_message_label");
     if (chat_message_label == nullptr) {
@@ -260,6 +280,9 @@ void EpaperDisplay::SetMemorialDate(int year, int month, int day) {
     auto* days_label = GetLabel("homepic_memorial_days");
     if (days_label != nullptr) {
         days_label->text = [this]() -> String {
+            if (!IsSystemTimeValid()) {
+                return String("待同步");
+            }
             time_t now = std::time(nullptr);
             struct tm tm_memorial = {};
             tm_memorial.tm_year = memorial_year_ - 1900;
@@ -309,6 +332,7 @@ void EpaperDisplay::ShowNotification(const std::string &notification, int durati
 
 void EpaperDisplay::ShowNotification(const char* notification, int duration_ms) {
     DisplayLockGuard lock(this);
+    ApplyChatPageLayoutForState();
 
     auto* notification_label = GetLabel("notification_label");
     if (notification_label == nullptr) {
@@ -467,6 +491,22 @@ void EpaperDisplay::SetupUI() {
     // 布局参考LCD的垂直结构，适配墨水屏尺寸
     // ================================
 
+    // ==========================================================page 0：Boot start==========================================================
+    AddLabel("boot_border", new EpaperLabel(
+        EpaperLabel::RoundRect(8, 8, 280, 112, 4, false, GxEPD_BLACK, 1, true, BOOT_PAGE)));
+    AddLabel("boot_title", new EpaperLabel(
+        EpaperLabel::Text("小智AI", 0, 26, 296, 24, 16, u8g2_font_wqy16_t_gb2312,
+                          GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, BOOT_PAGE)));
+    AddLabel("boot_subtitle", new EpaperLabel(
+        EpaperLabel::Text("Litsea XiaoZhi", 0, 54, 296, 18, 12, u8g2_font_wqy12_t_gb2312,
+                          GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, BOOT_PAGE)));
+    AddLabel("boot_status", new EpaperLabel(
+        EpaperLabel::Text("正在启动...", 0, 82, 296, 18, 12, u8g2_font_wqy12_t_gb2312,
+                          GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, BOOT_PAGE)));
+    AddLabel("boot_line", new EpaperLabel(
+        EpaperLabel::Line(72, 76, 224, 76, 1, GxEPD_BLACK, 1, true, BOOT_PAGE)));
+    // ==========================================================page 0：Boot end==========================================================
+
     // ==========================================================page 1 start==========================================================
     // ===== 1. 状态栏 (status_bar) =====
     // 位置：屏幕顶部，高度20像素
@@ -491,9 +531,10 @@ void EpaperDisplay::SetupUI() {
     // 时间标签 - 已隐藏，对话界面不再显示时间
     AddLabel("time_label",
              new EpaperLabel(EpaperLabel::Text([]() {
-                 time_t now = std::time(nullptr);
                  struct tm tm_now;
-                 localtime_r(&now, &tm_now);
+                 if (!GetValidLocalTime(&tm_now)) {
+                     return String("--:--");
+                 }
                  char buf[16];
                  strftime(buf, sizeof(buf), "%H:%M", &tm_now);
                  return String(buf);
@@ -551,17 +592,19 @@ void EpaperDisplay::SetupUI() {
     // ===== 2.2 时间区域（顶部左侧） =====
     AddLabel("home_slogan_1", new EpaperLabel(EpaperLabel::Text("今天吃什么?", 5, 4, 100, 16, 16, u8g2_font_wqy16_t_gb2312, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
     AddLabel("home_time", new EpaperLabel(EpaperLabel::Text([]() {
-                 time_t now = std::time(nullptr);
                  struct tm tm_now;
-                 localtime_r(&now, &tm_now);
+                 if (!GetValidLocalTime(&tm_now)) {
+                     return String("--:--");
+                 }
                  char buf[16];
                  strftime(buf, sizeof(buf), "%H:%M", &tm_now);
                  return String(buf);
              }, 5, 40, 150, 45, 45, u8g2_font_mystery_quest_56_tn, GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 2)));
     AddLabel("home_date", new EpaperLabel(EpaperLabel::Text([]() {
-                 time_t now = std::time(nullptr);
                  struct tm tm_now;
-                 localtime_r(&now, &tm_now);
+                 if (!GetValidLocalTime(&tm_now)) {
+                     return String("DATE SYNC");
+                 }
                  char buf[32];
                  strftime(buf, sizeof(buf), "%a/%b %d", &tm_now);
                  // 转换为大写以匹配原始风格
@@ -650,9 +693,10 @@ void EpaperDisplay::SetupUI() {
     // h=50 给 mystery_quest_56_tn 足够高度，同时避免刷新窗口下沿溢出覆盖日期文本
     AddLabel("homepic_time", new EpaperLabel(
         EpaperLabel::Text([]() {
-            time_t now = std::time(nullptr);
             struct tm tm_now;
-            localtime_r(&now, &tm_now);
+            if (!GetValidLocalTime(&tm_now)) {
+                return String("--:--");
+            }
             char buf[16];
             strftime(buf, sizeof(buf), "%H:%M", &tm_now);
             return String(buf);
@@ -663,13 +707,17 @@ void EpaperDisplay::SetupUI() {
     // h=18 覆盖 wqy16 字体的实际高度（ascent+descent≈16px）
     AddLabel("homepic_date", new EpaperLabel(
         EpaperLabel::Text([]() {
-            time_t now = std::time(nullptr);
             struct tm tm_now;
-            localtime_r(&now, &tm_now);
+            if (!GetValidLocalTime(&tm_now)) {
+                return String("日期同步中");
+            }
             char buf[32];
             strftime(buf, sizeof(buf), "%Y-%m-%d", &tm_now);
             const char* weekdays[] = {"周日", "周一", "周二", "周三", "周四", "周五", "周六"};
-            return String(buf) + " " + String(weekdays[tm_now.tm_wday]);
+            String text(buf);
+            text += " ";
+            text += weekdays[tm_now.tm_wday];
+            return text;
         }, 140, 55, 140, 16, 16, u8g2_font_wqy16_t_gb2312,
         GxEPD_BLACK, EpaperTextAlign::CENTER, 1, true, false, 5)));
 
@@ -681,6 +729,9 @@ void EpaperDisplay::SetupUI() {
         EpaperLabel::Text([this]() -> String {
             if (!memorial_date_set_) {
                 return "未设置";
+            }
+            if (!IsSystemTimeValid()) {
+                return "待同步";
             }
             time_t now = std::time(nullptr);
             struct tm tm_memorial = {};
@@ -703,12 +754,64 @@ void EpaperDisplay::SetPowerSaveMode(bool on) {
 
 }
 
+void EpaperDisplay::ApplyChatPageLayoutForState() {
+    if (current_page_ != CHAT_PAGE) {
+        return;
+    }
+
+    const bool config_mode =
+        Application::GetInstance().GetDeviceState() == kDeviceStateWifiConfiguring;
+
+    auto* status_label = GetLabel("status_label");
+    if (status_label != nullptr) {
+        status_label->x = config_mode ? 8 : 0;
+        status_label->y = config_mode ? 28 : 22;
+        status_label->w_max = config_mode ? 280 : 96;
+        status_label->h = config_mode ? 18 : 16;
+        status_label->align = EpaperTextAlign::CENTER;
+    }
+
+    auto* notification_label = GetLabel("notification_label");
+    if (notification_label != nullptr) {
+        notification_label->x = config_mode ? 8 : 100;
+        notification_label->y = config_mode ? 56 : 17;
+        notification_label->w_max = config_mode ? 280 : 192;
+        notification_label->h = config_mode ? 22 : 16;
+        notification_label->align = EpaperTextAlign::CENTER;
+    }
+
+    auto* chat_message_label = GetLabel("chat_message_label");
+    if (chat_message_label != nullptr) {
+        chat_message_label->x = config_mode ? 8 : 100;
+        chat_message_label->y = config_mode ? 82 : 66;
+        chat_message_label->w_max = config_mode ? 280 : 192;
+        chat_message_label->h = config_mode ? 22 : 0;
+        chat_message_label->align = EpaperTextAlign::CENTER;
+    }
+
+    auto* divider = GetLabel("status_bar_divider");
+    if (divider != nullptr) {
+        divider->visible = !config_mode;
+    }
+
+    auto* emoji_image = GetLabel("emoji_image");
+    if (emoji_image != nullptr) {
+        emoji_image->visible = !config_mode;
+    }
+
+    auto* mute_label = GetLabel("mute_label");
+    if (mute_label != nullptr) {
+        mute_label->visible = !config_mode;
+    }
+}
+
 void EpaperDisplay::SetPage(uint16_t page, bool refresh) {
+    DisplayLockGuard lock(this);
     current_page_ = page;
+    ApplyChatPageLayoutForState();
 
     // refresh=true 时统一由 SetPage 持锁刷新，调用方无需直接操作显示锁。
     if (refresh) {
-        DisplayLockGuard lock(this);
         UpdateUI(true);
     }
 }
@@ -1206,6 +1309,9 @@ void EpaperDisplay::RefreshFridgeLabelsInternal() {
 
         AddLabel("item_status_" + row_num, new EpaperLabel(
             EpaperLabel::Text([item]() {
+                if (!IsSystemTimeValid()) {
+                    return String("待同步");
+                }
                 time_t now = std::time(nullptr);
                 if (item.IsExpired(now)) {
                     return String("过期");

@@ -1,11 +1,11 @@
 #include "custom_page_manager.h"
 #include "board.h"
 #include "display/epaperdisplay/epaper_display.h"
+#include "display/epaperdisplay/epaper_font.h"
 #include "display/epaperdisplay/epaperui.h"
 #include <esp_log.h>
 #include <esp_system.h>
 #include <esp_timer.h>
-#include "driver/temperature_sensor.h"
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -30,6 +30,71 @@ static const int MAX_ELEMENTS_PER_PAGE = 30;
 // LittleFS 挂载点（与 local_control.cc 一致）
 static const char* CANVAS_MOUNT_POINT = "/canvas";
 static const char* REGISTRY_FILE = "/canvas/custom_pages.json";
+
+static size_t CustomPageBitmapBytes(int w, int h) {
+    if (w <= 0 || h <= 0) {
+        return 0;
+    }
+    // GxEPD2/Adafruit_GFX 的 1bpp bitmap 每行按字节补齐。
+    return ((static_cast<size_t>(w) + 7) / 8) * static_cast<size_t>(h);
+}
+
+static bool LooksLikeEncodedImage(const uint8_t* header, size_t len) {
+    if (len >= 8 &&
+        header[0] == 0x89 && header[1] == 'P' && header[2] == 'N' && header[3] == 'G') {
+        return true;
+    }
+    if (len >= 3 && header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF) {
+        return true;
+    }
+    if (len >= 6 &&
+        header[0] == 'G' && header[1] == 'I' && header[2] == 'F' &&
+        header[3] == '8') {
+        return true;
+    }
+    if (len >= 2 && header[0] == 'B' && header[1] == 'M') {
+        return true;
+    }
+    return false;
+}
+
+static bool GetValidLocalTime(struct tm* tm_out) {
+    if (tm_out == nullptr) {
+        return false;
+    }
+    time_t now = time(nullptr);
+    localtime_r(&now, tm_out);
+    return tm_out->tm_year >= (2025 - 1900);
+}
+
+static const uint8_t* GetCustomTextFont(int font_size) {
+    if (font_size >= 56) {
+        return u8g2_font_mystery_quest_56_tn;
+    }
+    return font_size <= 12 ? u8g2_font_wqy12_t_gb2312 : u8g2_font_wqy16_t_gb2312;
+}
+
+static int GetCustomTextHeight(int font_size) {
+    return font_size >= 56 ? 60 : font_size + 4;
+}
+
+static int GetCustomTextFontHeight(int font_size) {
+    return font_size >= 56 ? 45 : font_size;
+}
+
+static int GetStoredFontSize(const EpaperLabel* label) {
+    if (label && label->u8g2_font == u8g2_font_mystery_quest_56_tn) {
+        return 56;
+    }
+    return label ? static_cast<int>(label->h) - 4 : 16;
+}
+
+static int GetStoredTextY(const EpaperLabel* label) {
+    if (!label) {
+        return 0;
+    }
+    return static_cast<int>(label->y) - GetCustomTextFontHeight(GetStoredFontSize(label));
+}
 
 // ==================== 工具函数 ====================
 
@@ -167,11 +232,12 @@ int CustomPageManager::CreatePage(const std::string& name) {
     }
 
     // 获取当前时间作为创建时间
-    time_t now;
-    time(&now);
     char time_buf[32];
-    struct tm* t = localtime(&now);
-    strftime(time_buf, sizeof(time_buf), "%Y-%m-%dT%H:%M:%S", t);
+    time_buf[0] = '\0';
+    struct tm tm_now;
+    if (GetValidLocalTime(&tm_now)) {
+        strftime(time_buf, sizeof(time_buf), "%Y-%m-%dT%H:%M:%S", &tm_now);
+    }
 
     pages_.push_back({page, name, time_buf});
     SaveRegistry();
@@ -289,13 +355,7 @@ bool CustomPageManager::AddElement(int page, const std::string& id, const std::s
         return false;
     }
 
-    // 获取字体
-    const uint8_t* font = nullptr;
-    if (font_size <= 12) {
-        font = u8g2_font_wqy12_t_gb2312;
-    } else {
-        font = u8g2_font_wqy16_t_gb2312;
-    }
+    const uint8_t* font = GetCustomTextFont(font_size);
 
     EpaperTextAlign ealign = EpaperTextAlign::LEFT;
     if (align == "center") ealign = EpaperTextAlign::CENTER;
@@ -304,17 +364,18 @@ bool CustomPageManager::AddElement(int page, const std::string& id, const std::s
     EpaperLabel* label = nullptr;
 
     if (type == "text") {
-        int text_h = font_size + 4;
+        int text_h = GetCustomTextHeight(font_size);
+        int font_height = GetCustomTextFontHeight(font_size);
         if (!dynamic_type.empty()) {
             // 动态元素: 创建带 lambda 的 TextValue，文本由 FormatDynamicValue 实时生成
             std::string dtype = dynamic_type;
             label = new EpaperLabel(EpaperLabel::Text(
                 [dtype]() -> String { return String(CustomPageManager::FormatDynamicValue(dtype).c_str()); },
-                x, y, 276, text_h, font_size, font, GxEPD_BLACK, ealign, 1, true, false, page));
+                x, y, 276, text_h, font_height, font, GxEPD_BLACK, ealign, 1, true, false, page));
             strncpy(label->dynamic_type, dynamic_type.c_str(), sizeof(label->dynamic_type) - 1);
         } else {
             label = new EpaperLabel(
-                EpaperLabel::Text(text.c_str(), x, y, 276, text_h, font_size,
+                EpaperLabel::Text(text.c_str(), x, y, 276, text_h, font_height,
                                  font, GxEPD_BLACK, ealign, 1, true, false, page));
         }
     } else if (type == "rect") {
@@ -331,7 +392,20 @@ bool CustomPageManager::AddElement(int page, const std::string& id, const std::s
             ESP_LOGW(TAG, "Image file not found: %s", img_path.c_str());
             return false;
         }
-        size_t total_bytes = w * h / 8;
+        uint8_t header[8] = {0};
+        size_t header_len = fread(header, 1, sizeof(header), imgf);
+        if (LooksLikeEncodedImage(header, header_len)) {
+            ESP_LOGW(TAG, "Unsupported encoded image file: %s", img_path.c_str());
+            fclose(imgf);
+            return false;
+        }
+        fseek(imgf, 0, SEEK_SET);
+
+        size_t total_bytes = CustomPageBitmapBytes(w, h);
+        if (total_bytes == 0) {
+            fclose(imgf);
+            return false;
+        }
         uint8_t* bitmap = (uint8_t*)malloc(total_bytes);
         if (!bitmap) { fclose(imgf); return false; }
         size_t rd = fread(bitmap, 1, total_bytes, imgf);
@@ -417,8 +491,8 @@ std::string CustomPageManager::ListElements(int page) {
                 json += "{\"type\":\"text\",\"id\":\"" + EscapeJson(short_id) +
                        "\",\"text\":\"" + EscapeJson(label->text().c_str()) +
                        "\",\"x\":" + std::to_string((int)label->x) +
-                       ",\"y\":" + std::to_string((int)(label->y - label->h + 4)) +
-                       ",\"font_size\":" + std::to_string((int)label->h - 4) +
+                       ",\"y\":" + std::to_string(GetStoredTextY(label)) +
+                       ",\"font_size\":" + std::to_string(GetStoredFontSize(label)) +
                        ",\"align\":\"" +
                        (label->align == EpaperTextAlign::CENTER ? "center" :
                         label->align == EpaperTextAlign::RIGHT ? "right" : "left") +
@@ -547,8 +621,8 @@ void CustomPageManager::SavePageLayout(int page) {
                     fprintf(f, "{\"type\":\"text\",\"id\":\"%s\",\"text\":\"%s\",\"x\":%d,\"y\":%d,\"font_size\":%d,\"align\":\"%s\"",
                             short_id.c_str(),
                             EscapeJson(label->text().c_str()).c_str(),
-                            (int)label->x, (int)(label->y - label->h + 4),
-                            (int)label->h - 4,
+                            (int)label->x, GetStoredTextY(label),
+                            GetStoredFontSize(label),
                             label->align == EpaperTextAlign::CENTER ? "center" :
                             label->align == EpaperTextAlign::RIGHT ? "right" : "left");
                     // 如果是动态元素，追加 dtype 字段
@@ -680,37 +754,36 @@ void CustomPageManager::LoadPageLayout(int page) {
         std::string dtype;
         pos = obj.find("\"dtype\":\"");
         if (pos != std::string::npos) {
-            size_t s = obj.find("\"", pos + 9);
-            if (s != std::string::npos) {
-                size_t e = obj.find("\"", s + 1);
-                if (e != std::string::npos) {
-                    dtype = obj.substr(s + 1, e - s - 1);
-                }
+            size_t s = pos + 9;
+            size_t e = obj.find("\"", s);
+            if (e != std::string::npos) {
+                dtype = obj.substr(s, e - s);
             }
         }
 
         if (type.empty() || id.empty()) continue;
 
         std::string full_id = prefix + id;
-        const uint8_t* font = (font_size <= 12) ? u8g2_font_wqy12_t_gb2312 : u8g2_font_wqy16_t_gb2312;
+        const uint8_t* font = GetCustomTextFont(font_size);
         EpaperTextAlign ealign = EpaperTextAlign::LEFT;
         if (align == "center") ealign = EpaperTextAlign::CENTER;
         else if (align == "right") ealign = EpaperTextAlign::RIGHT;
 
         if (type == "text") {
-            int text_h = font_size + 4;
+            int text_h = GetCustomTextHeight(font_size);
+            int font_height = GetCustomTextFontHeight(font_size);
             if (!dtype.empty()) {
                 // 动态元素: 创建带 lambda 的 TextValue
                 std::string dt = dtype;
                 epaper->AddLabel(String(full_id.c_str()), new EpaperLabel(
                     EpaperLabel::Text([dt]() -> String { return String(CustomPageManager::FormatDynamicValue(dt).c_str()); },
-                                     x, y, 276, text_h, font_size, font, GxEPD_BLACK, ealign, 1, true, false, page)));
+                                     x, y, 276, text_h, font_height, font, GxEPD_BLACK, ealign, 1, true, false, page)));
                 // 设置 dynamic_type 字段
                 auto* lbl = epaper->GetLabel(String(full_id.c_str()));
                 if (lbl) strncpy(lbl->dynamic_type, dt.c_str(), sizeof(lbl->dynamic_type) - 1);
             } else {
                 epaper->AddLabel(String(full_id.c_str()), new EpaperLabel(
-                    EpaperLabel::Text(text.c_str(), x, y, 276, text_h, font_size,
+                    EpaperLabel::Text(text.c_str(), x, y, 276, text_h, font_height,
                                      font, GxEPD_BLACK, ealign, 1, true, false, page)));
             }
             count++;
@@ -726,7 +799,20 @@ void CustomPageManager::LoadPageLayout(int page) {
             std::string img_path = std::string(CANVAS_MOUNT_POINT) + "/" + img_name;
             FILE* imgf = fopen(img_path.c_str(), "rb");
             if (imgf) {
-                size_t total_bytes = w * h / 8;
+                uint8_t header[8] = {0};
+                size_t header_len = fread(header, 1, sizeof(header), imgf);
+                if (LooksLikeEncodedImage(header, header_len)) {
+                    ESP_LOGW(TAG, "Unsupported encoded image file during restore: %s", img_path.c_str());
+                    fclose(imgf);
+                    continue;
+                }
+                fseek(imgf, 0, SEEK_SET);
+
+                size_t total_bytes = CustomPageBitmapBytes(w, h);
+                if (total_bytes == 0) {
+                    fclose(imgf);
+                    continue;
+                }
                 uint8_t* bitmap = (uint8_t*)malloc(total_bytes);
                 if (bitmap) {
                     size_t rdb = fread(bitmap, 1, total_bytes, imgf);
@@ -758,46 +844,22 @@ void CustomPageManager::LoadAllPages() {
 
 // ==================== 动态元素更新 ====================
 
-// 静态温度传感器句柄（懒初始化）
-static temperature_sensor_handle_t s_temp_sensor = nullptr;
-static bool s_temp_sensor_init_done = false;
-
-static float ReadChipTemperature() {
-    // 懒初始化温度传感器
-    if (!s_temp_sensor_init_done) {
-        s_temp_sensor_init_done = true;
-        temperature_sensor_config_t temp_cfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(10, 50);
-        if (temperature_sensor_install(&temp_cfg, &s_temp_sensor) == ESP_OK) {
-            temperature_sensor_enable(s_temp_sensor);
-            ESP_LOGI("CustomPageMgr", "Temperature sensor installed");
-        } else {
-            ESP_LOGW("CustomPageMgr", "Failed to install temperature sensor");
-            s_temp_sensor = nullptr;
-        }
-    }
-    float celsius = 0.0f;
-    if (s_temp_sensor) {
-        if (temperature_sensor_get_celsius(s_temp_sensor, &celsius) != ESP_OK) {
-            celsius = 0.0f;
-        }
-    }
-    return celsius;
-}
-
 std::string CustomPageManager::FormatDynamicValue(const std::string& dtype) {
     if (dtype == "clock") {
         // 当前时间 HH:MM
-        time_t now = time(nullptr);
         struct tm tm_now;
-        localtime_r(&now, &tm_now);
+        if (!GetValidLocalTime(&tm_now)) {
+            return std::string("--:--");
+        }
         char buf[16];
         strftime(buf, sizeof(buf), "%H:%M", &tm_now);
         return std::string(buf);
     } else if (dtype == "date") {
         // 日期 YYYY-MM-DD 周X
-        time_t now = time(nullptr);
         struct tm tm_now;
-        localtime_r(&now, &tm_now);
+        if (!GetValidLocalTime(&tm_now)) {
+            return std::string("日期同步中");
+        }
         char buf[32];
         strftime(buf, sizeof(buf), "%Y-%m-%d", &tm_now);
         const char* weekdays[] = {"周日", "周一", "周二", "周三", "周四", "周五", "周六"};
@@ -805,34 +867,6 @@ std::string CustomPageManager::FormatDynamicValue(const std::string& dtype) {
         if (wday < 0 || wday > 6) wday = 0;
         size_t cur = strlen(buf);
         snprintf(buf + cur, sizeof(buf) - cur, " %s", weekdays[wday]);
-        return std::string(buf);
-    } else if (dtype == "datetime") {
-        // 日期时间 MM-DD HH:MM
-        time_t now = time(nullptr);
-        struct tm tm_now;
-        localtime_r(&now, &tm_now);
-        char buf[24];
-        strftime(buf, sizeof(buf), "%m-%d %H:%M", &tm_now);
-        return std::string(buf);
-    } else if (dtype == "cpu_temp") {
-        // 芯片温度 XX.X°C
-        float temp = ReadChipTemperature();
-        char buf[16];
-        snprintf(buf, sizeof(buf), "%.1f°C", temp);
-        return std::string(buf);
-    } else if (dtype == "heap") {
-        // 空闲堆内存
-        char buf[20];
-        snprintf(buf, sizeof(buf), "Heap: %luKB", (unsigned long)(esp_get_free_heap_size() / 1024));
-        return std::string(buf);
-    } else if (dtype == "uptime") {
-        // 运行时间
-        uint64_t secs = (uint64_t)(esp_timer_get_time() / 1000000ULL);
-        int d = (int)(secs / 86400);
-        int h = (int)((secs % 86400) / 3600);
-        int m = (int)((secs % 3600) / 60);
-        char buf[24];
-        snprintf(buf, sizeof(buf), "Up: %dd %dh %dm", d, h, m);
         return std::string(buf);
     }
     return std::string("");

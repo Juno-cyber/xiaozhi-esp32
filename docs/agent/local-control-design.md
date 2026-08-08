@@ -14,7 +14,7 @@
 | 同一局域网内控制设备 | HTTP 服务器 (port 8080) + mDNS |
 | 调用设备端 MCP 工具 | 注入 JSON-RPC 到 McpServer，与云端 LLM 走同一路径 |
 | 获取工具返回值 | 响应捕获钩子拦截 `SendMcpMessage`，HTTP 同步返回 |
-| 设备发现 | mDNS 注册 `xiaozhi.local` |
+| 设备发现 | mDNS 注册 `xiaozhi-<mac后6位>.local`；网页 `/ui` 可扫描同网段设备 |
 
 ### 非目标
 
@@ -31,9 +31,10 @@ PC / 手机 (同一 WiFi)
     │  curl / Python / 浏览器
     │
     ▼
-ESP32-S3 (192.168.1.10:8080  /  xiaozhi.local:8080)
+ESP32-S3 (192.168.1.10:8080  /  xiaozhi-a1b2c3.local:8080)
     │
     ├─ GET  /          → 设备健康检查
+    ├─ GET  /ui        → 浏览器设备扫描与选择页面
     ├─ POST /mcp       → 原始 JSON-RPC 2.0
     ├─ POST /api/call  → 简化调用 {"tool":"...","args":{...}}
     │
@@ -81,9 +82,24 @@ GET /
   "board": "bread-compact-wifi-epaperx",
   "version": "2.0.3",
   "idf_version": "v5.4.2",
-  "ip": "192.168.1.10"
+  "wifi_connected": true,
+  "mac": "aa:bb:cc:a1:b2:c3",
+  "hostname": "xiaozhi-a1b2c3",
+  "mdns": "xiaozhi-a1b2c3.local",
+  "mdns_url": "http://xiaozhi-a1b2c3.local:8080/",
+  "http_port": 8080,
+  "ip": "192.168.1.10",
+  "http_url": "http://192.168.1.10:8080/"
 }
 ```
+
+### 3.1.1 设备扫描页
+
+```
+GET /ui
+```
+
+浏览器页面会并发探测当前网段 `1-254` 的 `http://<ip>:8080/`，识别返回 `status=ok` 与 `board` 字段的小智设备，并把设备按 IP、MAC、hostname 列表展示。选择后会把目标 `http_url` 存入浏览器 `localStorage.xiaozhi_selected_url`。
 
 ### 3.2 简化调用
 
@@ -150,6 +166,7 @@ Content-Type: application/json
 | `fridge.item.remove` | 删除食材 | `{"item_id":1001}` |
 | `fridge.item.clear_all` | 清空全部 | `{}` |
 | `fridge.recipe.recommend` | 推荐菜谱并显示 | `{"recommendation_mode":"fridge_only","dish_name":"番茄炒蛋","required_ingredients":"番茄,鸡蛋"}` |
+| `device.network.info` | 查询当前 Wi-Fi IP 和本地 HTTP 地址 | `{}` |
 
 ### 墨水屏页面定义
 
@@ -168,6 +185,8 @@ Content-Type: application/json
 ```bash
 # 健康检查
 curl http://192.168.1.10:8080/
+
+# 打开扫描页：浏览器访问 http://192.168.1.10:8080/ui
 
 # 切换到食材列表页
 curl -X POST http://192.168.1.10:8080/api/call \
@@ -280,7 +299,7 @@ std::string WaitForResponse(uint32_t timeout_ms) {
   │    └─ 进入空闲状态
   │
   └─ 后台线程检测到 WiFi 连接
-       ├─ mdns_init() → 注册 xiaozhi.local
+       ├─ mdns_init() → 注册 xiaozhi-<mac后6位>.local
        ├─ httpd_start() → 监听 8080
        └─ 注册 URI handlers
 ```
@@ -334,7 +353,7 @@ Rebooting...
 | 切到 Page 4 | `fridge.pagemanager target_page=4` | ✅ 墨水屏刷新 |
 | 切到 Page 5 | `fridge.pagemanager target_page=5` | ✅ 墨水屏刷新 |
 | 冰箱统计 | `fridge.stats.summary` | ✅ 返回 JSON |
-| mDNS | `xiaozhi.local:8080` | ✅ 可解析 |
+| mDNS | `xiaozhi-<mac后6位>.local:8080` | ✅ 可解析 |
 
 ## 八、限制与未来方向
 

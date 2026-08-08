@@ -2,6 +2,8 @@
 #include "board.h"
 #include "display/epaperdisplay/epaper_display.h"
 #include "custom_page_manager.h"
+#include "system_info.h"
+#include <wifi_station.h>
 #include <esp_log.h>
 #include <sstream>
 #include <cstring>
@@ -16,6 +18,51 @@ static const char* CANVAS_LAYOUT_FILE = "/canvas/layout.json";
 // 前向声明（实现在后面的 namespace 块中）
 static void SaveCanvasLayout();
 static void LoadCanvasLayout();
+
+static size_t CanvasBitmapBytes(int w, int h) {
+    if (w <= 0 || h <= 0) {
+        return 0;
+    }
+    // GxEPD2/Adafruit_GFX 的 1bpp bitmap 每行按字节补齐。
+    return ((static_cast<size_t>(w) + 7) / 8) * static_cast<size_t>(h);
+}
+
+static bool LooksLikeEncodedImage(const uint8_t* header, size_t len) {
+    if (len >= 8 &&
+        header[0] == 0x89 && header[1] == 'P' && header[2] == 'N' && header[3] == 'G') {
+        return true;
+    }
+    if (len >= 3 && header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF) {
+        return true;
+    }
+    if (len >= 6 &&
+        header[0] == 'G' && header[1] == 'I' && header[2] == 'F' &&
+        header[3] == '8') {
+        return true;
+    }
+    if (len >= 2 && header[0] == 'B' && header[1] == 'M') {
+        return true;
+    }
+    return false;
+}
+
+static std::string GetDeviceMdnsHostname() {
+    std::string mac = SystemInfo::GetMacAddress();
+    std::string suffix;
+    suffix.reserve(6);
+    for (char ch : mac) {
+        if (ch != ':') {
+            suffix.push_back(ch);
+        }
+    }
+    if (suffix.size() > 6) {
+        suffix = suffix.substr(suffix.size() - 6);
+    }
+    if (suffix.empty()) {
+        suffix = "device";
+    }
+    return "xiaozhi-" + suffix;
+}
 
 namespace {
 
@@ -313,6 +360,9 @@ void FridgeMcpTools::Initialize() {
             return HandleRecipeRecommend(properties);
         });
     
+    // 旧的细粒度网页工具不再逐个注册，避免 MCP 工具数量触顶。
+    // HTTP /api/call 会把旧工具名映射到下面 3 个聚合工具。
+#if 0
     // ==================== Canvas 工具 (page 6) ====================
 
     // 工具 11: canvas.add_text — 在画布页放置文本
@@ -326,7 +376,7 @@ void FridgeMcpTools::Initialize() {
     canvas_text_props.AddProperty(Property("max_width", kPropertyTypeInteger, 276));
     canvas_text_props.AddProperty(Property("refresh", kPropertyTypeBoolean, false));
 
-    mcp_server.AddTool("fridge.canvas.add_text",
+    mcp_server.AddUserOnlyTool("fridge.canvas.add_text",
         "Place a text element on the canvas page (page 6). Screen is 296x128 pixels. "
         "font_size: 12 or 16 (supports Chinese). align: left|center|right. "
         "Set refresh=true to immediately update the display, or batch multiple calls then call canvas.refresh.",
@@ -345,7 +395,7 @@ void FridgeMcpTools::Initialize() {
     canvas_rect_props.AddProperty(Property("filled", kPropertyTypeBoolean, false));
     canvas_rect_props.AddProperty(Property("refresh", kPropertyTypeBoolean, false));
 
-    mcp_server.AddTool("fridge.canvas.add_rect",
+    mcp_server.AddUserOnlyTool("fridge.canvas.add_rect",
         "Place a rectangle on the canvas page. Use filled=true for solid, false for outline.",
         canvas_rect_props,
         [this](const PropertyList& properties) -> ReturnValue {
@@ -362,19 +412,19 @@ void FridgeMcpTools::Initialize() {
     canvas_line_props.AddProperty(Property("width", kPropertyTypeInteger, 1));
     canvas_line_props.AddProperty(Property("refresh", kPropertyTypeBoolean, false));
 
-    mcp_server.AddTool("fridge.canvas.add_line",
+    mcp_server.AddUserOnlyTool("fridge.canvas.add_line",
         "Place a line on the canvas page from (x1,y1) to (x2,y2).",
         canvas_line_props,
         [this](const PropertyList& properties) -> ReturnValue {
             return HandleCanvasAddLine(properties);
         });
 
-    // 工具 15: canvas.clear — 清空画布（或删除单个元素）
+    // 工具 14: canvas.clear — 清空画布（或删除单个元素）
     PropertyList canvas_clear_props;
     canvas_clear_props.AddProperty(Property("refresh", kPropertyTypeBoolean, true));
     canvas_clear_props.AddProperty(Property("id", kPropertyTypeString, std::string("")));
 
-    mcp_server.AddTool("fridge.canvas.clear",
+    mcp_server.AddUserOnlyTool("fridge.canvas.clear",
         "Clear all elements from the canvas page. Default refresh=true. "
         "Also supports removing a single element: pass id parameter to remove only that element.",
         canvas_clear_props,
@@ -394,6 +444,18 @@ void FridgeMcpTools::Initialize() {
             return HandleCanvasClear(properties);
         });
 
+    // 工具 15: canvas.remove — 删除默认画布单个元素
+    PropertyList canvas_remove_props;
+    canvas_remove_props.AddProperty(Property("id", kPropertyTypeString));
+    canvas_remove_props.AddProperty(Property("refresh", kPropertyTypeBoolean, true));
+
+    mcp_server.AddUserOnlyTool("fridge.canvas.remove",
+        "Remove one element from the canvas page (page 6) by id.",
+        canvas_remove_props,
+        [this](const PropertyList& properties) -> ReturnValue {
+            return HandleCanvasRemove(properties);
+        });
+
     // 工具 16: canvas.add_image — 从文件加载图片到画布
     PropertyList canvas_image_props;
     canvas_image_props.AddProperty(Property("id", kPropertyTypeString));
@@ -404,14 +466,32 @@ void FridgeMcpTools::Initialize() {
     canvas_image_props.AddProperty(Property("h", kPropertyTypeInteger));
     canvas_image_props.AddProperty(Property("refresh", kPropertyTypeBoolean, false));
 
-    mcp_server.AddTool("fridge.canvas.add_image",
+    mcp_server.AddUserOnlyTool("fridge.canvas.add_image",
         "Load a bitmap image from canvas storage (uploaded via POST /api/canvas_image?name=xxx) "
-        "and place it on the canvas page. The image must be a 1-bpp (black/white) raw bitmap "
-        "with the given width and height. Use the upload API first to transfer the file, "
+        "and place it on the canvas page. The image must be a row-padded 1-bpp raw bitmap "
+        "with ((w+7)/8)*h bytes. Use the upload API first to transfer the converted file, "
         "then call this tool to display it.",
         canvas_image_props,
         [this](const PropertyList& properties) -> ReturnValue {
             return HandleCanvasAddImage(properties);
+        });
+
+    // 工具 17: canvas.list — 列出默认画布元素
+    PropertyList canvas_list_props;
+    mcp_server.AddUserOnlyTool("fridge.canvas.list",
+        "List persisted elements on the canvas page (page 6).",
+        canvas_list_props,
+        [this](const PropertyList& properties) -> ReturnValue {
+            return HandleCanvasList(properties);
+        });
+
+    // 工具 18: canvas.refresh — 刷新默认画布页面
+    PropertyList canvas_refresh_props;
+    mcp_server.AddUserOnlyTool("fridge.canvas.refresh",
+        "Refresh the canvas page (page 6) after batched canvas operations.",
+        canvas_refresh_props,
+        [this](const PropertyList& properties) -> ReturnValue {
+            return HandleCanvasRefresh(properties);
         });
 
     // ==================== 自定义页面工具 (page 7-15) ====================
@@ -420,7 +500,7 @@ void FridgeMcpTools::Initialize() {
     PropertyList page_create_props;
     page_create_props.AddProperty(Property("name", kPropertyTypeString));
 
-    mcp_server.AddTool("fridge.page.create",
+    mcp_server.AddUserOnlyTool("fridge.page.create",
         "Create a custom e-paper page (page number 7-15). Returns the assigned page number. "
         "Custom pages persist across reboots. Use fridge.page.element.add to place elements.",
         page_create_props,
@@ -432,7 +512,7 @@ void FridgeMcpTools::Initialize() {
     PropertyList page_delete_props;
     page_delete_props.AddProperty(Property("page", kPropertyTypeInteger, 7, 15));
 
-    mcp_server.AddTool("fridge.page.delete",
+    mcp_server.AddUserOnlyTool("fridge.page.delete",
         "Delete a custom page and all its elements. Built-in pages (1-6) cannot be deleted.",
         page_delete_props,
         [this](const PropertyList& properties) -> ReturnValue {
@@ -440,8 +520,9 @@ void FridgeMcpTools::Initialize() {
         });
 
     // 工具 21: page.list — 列出所有页面
-    mcp_server.AddTool("fridge.page.list",
-        "List all pages: built-in (1-6) and custom (7-15) with their names and element counts.",
+    mcp_server.AddUserOnlyTool("fridge.page.list",
+        "List all pages: built-in (1-6) and custom (7-15) with their names. "
+        "Use the returned page number with fridge.pagemanager to switch by voice.",
         PropertyList(),
         [this](const PropertyList& properties) -> ReturnValue {
             return HandlePageList(properties);
@@ -452,7 +533,7 @@ void FridgeMcpTools::Initialize() {
     page_rename_props.AddProperty(Property("page", kPropertyTypeInteger, 7, 15));
     page_rename_props.AddProperty(Property("name", kPropertyTypeString));
 
-    mcp_server.AddTool("fridge.page.rename",
+    mcp_server.AddUserOnlyTool("fridge.page.rename",
         "Rename a custom page. Only applies to custom pages (7-15).",
         page_rename_props,
         [this](const PropertyList& properties) -> ReturnValue {
@@ -464,7 +545,7 @@ void FridgeMcpTools::Initialize() {
     elem_add_props.AddProperty(Property("page", kPropertyTypeInteger, 7, 15));
     elem_add_props.AddProperty(Property("id", kPropertyTypeString));
     elem_add_props.AddProperty(Property("type", kPropertyTypeString,
-        std::string("text|rect|line")));
+        std::string("text|rect|line|image")));
     elem_add_props.AddProperty(Property("x", kPropertyTypeInteger, 0, 295));
     elem_add_props.AddProperty(Property("y", kPropertyTypeInteger, 0, 127));
     elem_add_props.AddProperty(Property("text", kPropertyTypeString, std::string("")));
@@ -478,20 +559,22 @@ void FridgeMcpTools::Initialize() {
     elem_add_props.AddProperty(Property("x2", kPropertyTypeInteger, 0));
     elem_add_props.AddProperty(Property("y2", kPropertyTypeInteger, 0));
     elem_add_props.AddProperty(Property("width", kPropertyTypeInteger, 1));
+    elem_add_props.AddProperty(Property("name", kPropertyTypeString, std::string("")));
     elem_add_props.AddProperty(Property("max_width", kPropertyTypeInteger, 276));
     elem_add_props.AddProperty(Property("dynamic", kPropertyTypeBoolean, false));
     elem_add_props.AddProperty(Property("dynamic_type", kPropertyTypeString, std::string("")));
     elem_add_props.AddProperty(Property("refresh", kPropertyTypeBoolean, false));
 
-    mcp_server.AddTool("fridge.page.element.add",
-        "Add an element to a custom page (7-15). type: text/rect/line. "
+    mcp_server.AddUserOnlyTool("fridge.page.element.add",
+        "Add an element to a custom page (7-15). type: text/rect/line/image. "
         "Set dynamic=true for elements whose text will be updated via element.update "
         "(e.g. clock, fan count, weather). Screen is 296x128. "
         "text params: text,font_size,align,max_width. rect params: w,h,filled. "
         "line params: x1,y1,x2,y2,width. Set refresh=true to immediately update display. "
+        "image params: name,w,h; name must be uploaded via POST /api/canvas_image first. "
         "dynamic_type (optional, for text only): device-side auto-updating value. "
-        "Supported: clock(HH:MM), date(YYYY-MM-DD 周X), datetime(MM-DD HH:MM), "
-        "cpu_temp(XX.X°C), heap(Heap: XXKB), uptime(Up: Xd Xh Xm). "
+        "Supported: clock(HH:MM), date(YYYY-MM-DD 周X). "
+        "For a large clock, set dynamic_type=clock and font_size=56. "
         "When dynamic_type is set, the text param is ignored and the device updates "
         "the value automatically every second.",
         elem_add_props,
@@ -506,7 +589,7 @@ void FridgeMcpTools::Initialize() {
     elem_update_props.AddProperty(Property("text", kPropertyTypeString));
     elem_update_props.AddProperty(Property("refresh", kPropertyTypeBoolean, true));
 
-    mcp_server.AddTool("fridge.page.element.update",
+    mcp_server.AddUserOnlyTool("fridge.page.element.update",
         "Update the text of a dynamic element on a custom page. "
         "This is the core mechanism for Hermes to push dynamic data "
         "(fan counts, weather, countdowns, stock prices, etc.) to the e-paper display. "
@@ -523,7 +606,7 @@ void FridgeMcpTools::Initialize() {
     elem_remove_props.AddProperty(Property("id", kPropertyTypeString));
     elem_remove_props.AddProperty(Property("refresh", kPropertyTypeBoolean, false));
 
-    mcp_server.AddTool("fridge.page.element.remove",
+    mcp_server.AddUserOnlyTool("fridge.page.element.remove",
         "Remove an element from a custom page by id.",
         elem_remove_props,
         [this](const PropertyList& properties) -> ReturnValue {
@@ -534,7 +617,7 @@ void FridgeMcpTools::Initialize() {
     PropertyList elem_list_props;
     elem_list_props.AddProperty(Property("page", kPropertyTypeInteger, 7, 15));
 
-    mcp_server.AddTool("fridge.page.element.list",
+    mcp_server.AddUserOnlyTool("fridge.page.element.list",
         "List all elements on a custom page with their properties.",
         elem_list_props,
         [this](const PropertyList& properties) -> ReturnValue {
@@ -546,14 +629,124 @@ void FridgeMcpTools::Initialize() {
     page_clear_props.AddProperty(Property("page", kPropertyTypeInteger, 7, 15));
     page_clear_props.AddProperty(Property("refresh", kPropertyTypeBoolean, true));
 
-    mcp_server.AddTool("fridge.page.clear",
+    mcp_server.AddUserOnlyTool("fridge.page.clear",
         "Clear all elements from a custom page. The page itself is not deleted.",
         page_clear_props,
         [this](const PropertyList& properties) -> ReturnValue {
             return HandlePageClear(properties);
         });
 
-    ESP_LOGI(TAG, "FridgeMcpTools initialized with 24 tools (10 fridge + 5 canvas + 9 custom page)");
+    // 工具 28: network.info — 读取当前 Wi-Fi IP 和本地 HTTP 访问地址
+    mcp_server.AddUserOnlyTool("device.network.info",
+        "Get current Wi-Fi IP address and local HTTP URL for browser access.",
+        PropertyList(),
+        [this](const PropertyList& properties) -> ReturnValue {
+            return HandleNetworkInfo(properties);
+        });
+
+#endif
+
+    // ==================== Agent 聚合工具 ====================
+
+    PropertyList canvas_control_props;
+    canvas_control_props.AddProperty(Property("action", kPropertyTypeString));
+    canvas_control_props.AddProperty(Property("id", kPropertyTypeString, std::string("")));
+    canvas_control_props.AddProperty(Property("text", kPropertyTypeString, std::string("")));
+    canvas_control_props.AddProperty(Property("name", kPropertyTypeString, std::string("")));
+    canvas_control_props.AddProperty(Property("x", kPropertyTypeInteger, 0));
+    canvas_control_props.AddProperty(Property("y", kPropertyTypeInteger, 0));
+    canvas_control_props.AddProperty(Property("x1", kPropertyTypeInteger, 0));
+    canvas_control_props.AddProperty(Property("y1", kPropertyTypeInteger, 0));
+    canvas_control_props.AddProperty(Property("x2", kPropertyTypeInteger, 0));
+    canvas_control_props.AddProperty(Property("y2", kPropertyTypeInteger, 0));
+    canvas_control_props.AddProperty(Property("w", kPropertyTypeInteger, 40));
+    canvas_control_props.AddProperty(Property("h", kPropertyTypeInteger, 30));
+    canvas_control_props.AddProperty(Property("width", kPropertyTypeInteger, 1));
+    canvas_control_props.AddProperty(Property("font_size", kPropertyTypeInteger, 16));
+    canvas_control_props.AddProperty(Property("align", kPropertyTypeString, std::string("left")));
+    canvas_control_props.AddProperty(Property("max_width", kPropertyTypeInteger, 276));
+    canvas_control_props.AddProperty(Property("filled", kPropertyTypeBoolean, false));
+    canvas_control_props.AddProperty(Property("refresh", kPropertyTypeBoolean, false));
+
+    mcp_server.AddTool("fridge.canvas.control",
+        "Control default canvas page 6. action: add_text, add_rect, add_line, add_image, list, remove, clear, refresh.",
+        canvas_control_props,
+        [this](const PropertyList& properties) -> ReturnValue {
+            std::string action = properties["action"].value<std::string>();
+            if (action == "add_text") return HandleCanvasAddText(properties);
+            if (action == "add_rect") return HandleCanvasAddRect(properties);
+            if (action == "add_line") return HandleCanvasAddLine(properties);
+            if (action == "add_image") return HandleCanvasAddImage(properties);
+            if (action == "list") return HandleCanvasList(properties);
+            if (action == "remove") return HandleCanvasRemove(properties);
+            if (action == "clear") return HandleCanvasClear(properties);
+            if (action == "refresh") return HandleCanvasRefresh(properties);
+            return ReturnValue("Invalid canvas action.");
+        });
+
+    PropertyList page_control_props;
+    page_control_props.AddProperty(Property("action", kPropertyTypeString));
+    page_control_props.AddProperty(Property("page", kPropertyTypeInteger, 7, 7, 15));
+    page_control_props.AddProperty(Property("name", kPropertyTypeString, std::string("")));
+    page_control_props.AddProperty(Property("refresh", kPropertyTypeBoolean, true));
+
+    mcp_server.AddTool("fridge.page.control",
+        "Manage custom e-paper pages 7-15. action: create, delete, list, rename, clear.",
+        page_control_props,
+        [this](const PropertyList& properties) -> ReturnValue {
+            std::string action = properties["action"].value<std::string>();
+            if (action == "create") return HandlePageCreate(properties);
+            if (action == "delete") return HandlePageDelete(properties);
+            if (action == "list") return HandlePageList(properties);
+            if (action == "rename") return HandlePageRename(properties);
+            if (action == "clear") return HandlePageClear(properties);
+            return ReturnValue("Invalid page action.");
+        });
+
+    PropertyList element_control_props;
+    element_control_props.AddProperty(Property("action", kPropertyTypeString));
+    element_control_props.AddProperty(Property("page", kPropertyTypeInteger, 7, 15));
+    element_control_props.AddProperty(Property("id", kPropertyTypeString, std::string("")));
+    element_control_props.AddProperty(Property("type", kPropertyTypeString, std::string("text")));
+    element_control_props.AddProperty(Property("text", kPropertyTypeString, std::string("")));
+    element_control_props.AddProperty(Property("name", kPropertyTypeString, std::string("")));
+    element_control_props.AddProperty(Property("x", kPropertyTypeInteger, 0, 295));
+    element_control_props.AddProperty(Property("y", kPropertyTypeInteger, 0, 127));
+    element_control_props.AddProperty(Property("x1", kPropertyTypeInteger, 0));
+    element_control_props.AddProperty(Property("y1", kPropertyTypeInteger, 0));
+    element_control_props.AddProperty(Property("x2", kPropertyTypeInteger, 0));
+    element_control_props.AddProperty(Property("y2", kPropertyTypeInteger, 0));
+    element_control_props.AddProperty(Property("w", kPropertyTypeInteger, 40));
+    element_control_props.AddProperty(Property("h", kPropertyTypeInteger, 30));
+    element_control_props.AddProperty(Property("width", kPropertyTypeInteger, 1));
+    element_control_props.AddProperty(Property("font_size", kPropertyTypeInteger, 16));
+    element_control_props.AddProperty(Property("align", kPropertyTypeString, std::string("left")));
+    element_control_props.AddProperty(Property("max_width", kPropertyTypeInteger, 276));
+    element_control_props.AddProperty(Property("filled", kPropertyTypeBoolean, false));
+    element_control_props.AddProperty(Property("dynamic", kPropertyTypeBoolean, false));
+    element_control_props.AddProperty(Property("dynamic_type", kPropertyTypeString, std::string("")));
+    element_control_props.AddProperty(Property("refresh", kPropertyTypeBoolean, false));
+
+    mcp_server.AddTool("fridge.page.element.control",
+        "Control elements on custom pages 7-15. action: add, update, remove, list.",
+        element_control_props,
+        [this](const PropertyList& properties) -> ReturnValue {
+            std::string action = properties["action"].value<std::string>();
+            if (action == "add") return HandleElementAdd(properties);
+            if (action == "update") return HandleElementUpdate(properties);
+            if (action == "remove") return HandleElementRemove(properties);
+            if (action == "list") return HandleElementList(properties);
+            return ReturnValue("Invalid element action.");
+        });
+
+    mcp_server.AddTool("device.network.info",
+        "Get current Wi-Fi IP address and local HTTP URL for browser access.",
+        PropertyList(),
+        [this](const PropertyList& properties) -> ReturnValue {
+            return HandleNetworkInfo(properties);
+        });
+
+    ESP_LOGI(TAG, "FridgeMcpTools initialized with 14 visible tools (10 fridge + 3 UI aggregators + 1 network)");
     // 注意：LoadCanvasLayout() 不在这里调用，因为 LittleFS 还没挂载
     // 由 LocalControl::MountCanvasStorage() 挂载后调用 LoadCanvasLayout()
     // 自定义页面也由 RestoreCanvasLayout() 一并恢复
@@ -1111,6 +1304,36 @@ ReturnValue FridgeMcpTools::HandleRecipeRecommend(const PropertyList& properties
     }
 }
 
+ReturnValue FridgeMcpTools::HandleNetworkInfo(const PropertyList& properties) {
+    (void)properties;
+
+    auto& wifi_station = WifiStation::GetInstance();
+    bool connected = wifi_station.IsConnected();
+    std::string ssid = wifi_station.GetSsid();
+    std::string ip = wifi_station.GetIpAddress();
+    std::string http_url = ip.empty() ? "" : "http://" + ip + ":8080/";
+    std::string hostname = GetDeviceMdnsHostname();
+    std::string mdns = hostname + ".local";
+    std::string mdns_url = "http://" + mdns + ":8080/";
+    std::string mac = SystemInfo::GetMacAddress();
+
+    std::string result_json = "{";
+    result_json += "\"wifi_connected\":";
+    result_json += connected ? "true" : "false";
+    result_json += ",\"ssid\":\"" + EscapeJsonString(ssid) + "\"";
+    result_json += ",\"ip\":\"" + EscapeJsonString(ip) + "\"";
+    result_json += ",\"mac\":\"" + EscapeJsonString(mac) + "\"";
+    result_json += ",\"hostname\":\"" + EscapeJsonString(hostname) + "\"";
+    result_json += ",\"http_port\":8080";
+    result_json += ",\"http_url\":\"" + EscapeJsonString(http_url) + "\"";
+    result_json += ",\"mdns\":\"" + EscapeJsonString(mdns) + "\"";
+    result_json += ",\"mdns_url\":\"" + EscapeJsonString(mdns_url) + "\"";
+    result_json += "}";
+
+    ESP_LOGI(TAG, "[DEBUG] device.network.info result: %s", result_json.c_str());
+    return result_json;
+}
+
 // ==================== Canvas 工具实现 ====================
 
 // canvas 前缀，用于标识动态添加的画布控件
@@ -1432,7 +1655,20 @@ static void LoadCanvasLayout() {
             std::string img_path = std::string("/canvas/") + img_name;
             FILE* imgf = fopen(img_path.c_str(), "rb");
             if (imgf) {
-                size_t total_bytes = w * h / 8;
+                uint8_t header[8] = {0};
+                size_t header_len = fread(header, 1, sizeof(header), imgf);
+                if (LooksLikeEncodedImage(header, header_len)) {
+                    ESP_LOGW(TAG, "Unsupported encoded image file during restore: %s", img_path.c_str());
+                    fclose(imgf);
+                    continue;
+                }
+                fseek(imgf, 0, SEEK_SET);
+
+                size_t total_bytes = CanvasBitmapBytes(w, h);
+                if (total_bytes == 0) {
+                    fclose(imgf);
+                    continue;
+                }
                 uint8_t* bitmap = (uint8_t*)malloc(total_bytes);
                 if (bitmap) {
                     size_t rd = fread(bitmap, 1, total_bytes, imgf);
@@ -1578,11 +1814,22 @@ ReturnValue FridgeMcpTools::HandleElementAdd(const PropertyList& properties) {
         try { x2 = properties["x2"].value<int>(); } catch (...) {}
         try { y2 = properties["y2"].value<int>(); } catch (...) {}
         try { width = properties["width"].value<int>(); } catch (...) {}
+        std::string image_name;
+        try { image_name = properties["name"].value<std::string>(); } catch (...) {}
 
         bool dynamic = false;
         try { dynamic = properties["dynamic"].value<bool>(); } catch (...) {}
         std::string dynamic_type;
         try { dynamic_type = properties["dynamic_type"].value<std::string>(); } catch (...) {}
+        if (!dynamic_type.empty() && dynamic_type != "clock" && dynamic_type != "date") {
+            return ReturnValue("Unsupported dynamic_type. Supported values: clock, date.");
+        }
+        if (dynamic_type != "clock" && font_size >= 56) {
+            font_size = 16;
+        }
+        if (dynamic_type == "date" && font_size >= 56) {
+            font_size = 16;
+        }
         bool refresh = false;
         try { refresh = properties["refresh"].value<bool>(); } catch (...) {}
 
@@ -1593,7 +1840,7 @@ ReturnValue FridgeMcpTools::HandleElementAdd(const PropertyList& properties) {
         if (!cpm.AddElement(page, id, type, text, x, y,
                            font_size, align, w, h, filled,
                            x1, y1, x2, y2, width,
-                           "",  // image_name（暂不支持通过此工具添加图片）
+                           image_name,
                            dynamic, dynamic_type, "", 0)) {
             return ReturnValue("Failed to add element to page " + std::to_string(page) +
                 ". Page may not exist or element limit (30) reached.");
@@ -1926,8 +2173,20 @@ ReturnValue FridgeMcpTools::HandleCanvasAddImage(const PropertyList& properties)
             return ReturnValue("Image file not found: " + name + ". Upload it first via POST /api/canvas_image?name=" + name);
         }
 
-        // 读取文件到缓冲区
-        size_t total_bytes = w * h / 8;  // 1-bpp: 每像素1位，8像素=1字节
+        uint8_t header[8] = {0};
+        size_t header_len = fread(header, 1, sizeof(header), f);
+        if (LooksLikeEncodedImage(header, header_len)) {
+            fclose(f);
+            return ReturnValue("Unsupported image format: upload a converted row-padded 1-bpp raw bitmap, not PNG/JPEG/GIF/BMP.");
+        }
+        fseek(f, 0, SEEK_SET);
+
+        // 读取文件到缓冲区。1bpp 位图每行按字节补齐，不是简单 w*h/8。
+        size_t total_bytes = CanvasBitmapBytes(w, h);
+        if (total_bytes == 0) {
+            fclose(f);
+            return ReturnValue("Invalid image size");
+        }
         uint8_t* bitmap = (uint8_t*)malloc(total_bytes);
         if (!bitmap) {
             fclose(f);

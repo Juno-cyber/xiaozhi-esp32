@@ -12,9 +12,13 @@
 //   POST /mcp                    原始 JSON-RPC 2.0（与云端 LLM 走同一路径）
 //   POST /api/call               简化调用 {"tool":"fridge.pagemanager","args":{"target_page":3}}
 //   POST /api/canvas_image       上传图片到 canvas_data 分区
-//   GET  /api/canvas_image?name= 查询已存储的图片列表
+//   GET  /api/canvas_image       查询已存储的图片列表
+//   GET  /api/canvas_image?name= 下载已存储的 raw 图片
+//   GET  /api/device_name        查询设备显示名称（NVS 持久化，可自定义）
+//   POST /api/device_name        设置设备显示名称 {"name":"xxx"}，空名恢复默认
+//   GET  /ui                     设备扫描与选择页面
 //
-// mDNS: 设备注册为 xiaozhi.local（可在浏览器/curl 中直接使用）
+// mDNS: 设备注册为 xiaozhi-<mac后6位>.local（多设备不冲突）
 class LocalControl {
 public:
     static LocalControl& GetInstance();
@@ -38,6 +42,9 @@ private:
     static esp_err_t HandleApiCall(httpd_req_t* req);
     static esp_err_t HandleCanvasImageUpload(httpd_req_t* req);
     static esp_err_t HandleCanvasImageList(httpd_req_t* req);
+    static esp_err_t HandleDeviceNameGet(httpd_req_t* req);
+    static esp_err_t HandleDeviceNameSet(httpd_req_t* req);
+    static esp_err_t HandleUi(httpd_req_t* req);
 
     // 挂载 canvas_data 分区为 LittleFS
     void MountCanvasStorage();
@@ -49,4 +56,3 @@ private:
     void InjectToolCall(const std::string& tool_name, const std::string& args_json);
     std::string WaitForResponse(uint32_t timeout_ms);
 };
-

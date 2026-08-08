@@ -54,6 +54,7 @@
 //##################   Epaperdisplay类的实现 end
 
 enum EpaperPage {
+    BOOT_PAGE = 0,
     CHAT_PAGE = 1,
     FRIDGE_STATS_PAGE = 2,
     FOOD_LIST_PAGE = 3,
@@ -111,7 +112,7 @@ protected:
     // UI 管理
     std::map<String, EpaperLabel*> ui_labels_;  // 存储所有 UI 元素
     bool ui_dirty_ = false;                      // 标记是否需要刷新
-    uint16_t current_page_ = HOME_PIC_DISPLAY;  // 当前页面
+    uint16_t current_page_ = BOOT_PAGE;         // 当前页面
     uint8_t display_rotation_ = 3;              // 显示旋转: 1=正常, 3=180°旋转
 
     // 纪念日相关
@@ -123,6 +124,7 @@ protected:
     // 内部渲染方法
     void RenderLabel(EpaperLabel *label); // 渲染单个 label
     void RenderTextWithWrap(EpaperLabel* label); // 渲染换行文本
+    void ApplyChatPageLayoutForState(); // 根据设备状态调整对话页布局
     
     // 文本边界计算
     struct TextBounds {
